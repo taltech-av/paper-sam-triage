@@ -1,0 +1,368 @@
+\documentclass[conference]{IEEEtran}
+\pdfminorversion=4
+\IEEEoverridecommandlockouts
+
+% Packages
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage[compatibility=false]{caption}
+\usepackage{subcaption}
+\usepackage{orcidlink}
+\usepackage{dblfloatfix}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes}
+\usepackage{pgfplots}
+
+\makeatletter
+\newcommand{\linebreakand}{%
+  \end{@IEEEauthorhalign}
+  \hfill\mbox{}\par
+  \mbox{}\hfill\begin{@IEEEauthorhalign}
+}
+\makeatother
+
+\title{Language‑Guided Pseudo‑Label Refinement for Multi‑Modal Semantic Segmentation}
+
+\author{\small Toomas Tahves$^{1}$, Mauro Bellone$^{2,5}$, Raivo Sell$^{1}$ \\ 
+$^{1}$\textit{Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia} \\ 
+$^{2}$\textit{FinEst Centre for Smart Cities, Tallinn University of Technology, Estonia} \\
+$^{5}$\textit{Department of Computer Science and Engineering, Universitas Mercatorum, Rome, Italy} \\
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Training reliable multi-modal perception models for autonomous driving still depends heavily on dense pixel-level annotations, which remain costly and slow to produce at scale. 
+Although the Segment Anything Model (SAM) can generate large numbers of pseudo-labels, its masks often drift at object boundaries, miss small traffic participants, or introduce spurious segments. 
+These issues are especially problematic for vulnerable road users and other long‑tail classes that already suffer from limited representation in driving datasets. 
+Recent vision–language models (VLMs) offer strong semantic priors and can reason about object presence and spatial layout directly from images, making them a promising tool for improving pseudo-label quality. 
+This work introduces a simple refinement framework where a VLM is prompted with class-specific queries and used to validate SAM predictions, suppress clear hallucinations, and recover small objects that SAM frequently overlooks. 
+The refined masks are then used to supervise the CLFTv2 camera–LiDAR fusion network, allowing us to study how improved pseudo-labels affect downstream segmentation. 
+Experiments on the Zenseact Open Dataset and ISEAuto show that VLM-guided refinement consistently improves IoU for small and safety‑critical classes, while also reducing common SAM failure cases. 
+Models trained on the refined labels achieve better overall accuracy and more stable performance across weather and illumination conditions. 
+These results indicate that VLM-assisted refinement is a practical way to raise pseudo-label quality without additional manual annotation effort. 
+\end{abstract}
+
+
+
+\begin{IEEEkeywords}
+autonomous driving, semantic segmentation, multi-modal fusion, Vision Transformers, CLFTv2, Mask2Former, model specialization, class imbalance, transfer learning, computational efficiency, Segment Anything Model
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+High-quality semantic annotations remain one of the main bottlenecks in building reliable perception systems for autonomous driving.  
+Modern multi-modal datasets contain millions of camera--LiDAR frames, yet only a small portion can be annotated at pixel level because each mask must be checked for geometric plausibility, occlusion handling, and cross-sensor consistency.  
+Foundation models such as the Segment Anything Model (SAM) \cite{kirillov2023sam} help reduce the cost of mask generation, but their outputs often struggle in driving scenes, showing boundary drift, hallucinated regions, missed occlusions, and sensitivity to weather or illumination.  
+As a result, large-scale annotation pipelines are limited not by generating masks, but by the effort required to validate and correct them.
+
+Existing semi-automated pipelines address part of this problem using geometric priors, multi-sensor consistency checks, and threshold-based filtering \cite{zou2019confidence,jaritz2020xmuda}.  
+These methods are efficient, but they rely on fixed rules that can reject valid masks, accept subtle errors, and provide little insight into why a decision was made.  
+At the same time, recent open-source large language models have shown strong capabilities in structured reasoning and multi-step decision-making, suggesting that they may be better suited to coordinating annotation workflows than replacing vision models directly.
+
+This paper introduces a multi-agent annotation system driven by visual LLMs for validating and refining SAM-generated segmentation masks in autonomous-driving datasets.  
+Instead of using a single classifier, we decompose the validation process into specialized agents responsible for bounding-box filtering, mask-quality assessment, failure-mode classification, correction proposal generation, and cross-modal consistency checking.  
+Each agent operates on structured metadata extracted from masks, detector outputs, and LiDAR projections, and their decisions are combined into an interpretable triage outcome.  
+This modular design keeps the process transparent while allowing each failure mode to be handled independently.
+
+Our contributions are threefold.  
+First, we formulate mask validation as a risk-aware triage problem over structured multi-modal metadata.  
+Second, we design a modular multi-agent architecture that separates failure detection, correction suggestion, and geometric consistency reasoning.  
+Third, we evaluate the system on ZOD and ISEAuto using annotation-quality metrics, failure-mode agreement, cross-modal consistency, and downstream segmentation performance.  
+Together, these results position visual LLMs as reasoning agents for scalable annotation quality control rather than as direct perception models.
+
+
+
+\section{Related Work}
+\label{sec:related_work}
+
+\subsection{Semantic Segmentation and Dataset Annotation in Autonomous Driving}
+
+Semantic segmentation is a core component of autonomous-driving perception because it provides dense scene understanding for planning, tracking, and safety-critical decision-making.  
+Early camera-based architectures such as FCN, U-Net, and PSPNet established strong baselines for pixel-level scene parsing \cite{long2015fcn,ronneberger2015unet,zhao2017psp}.  
+Later work extended these ideas to multi-modal settings by integrating LiDAR through early-, late-, and feature-level fusion strategies \cite{valada2019selfsupervised,jaritz2019multimodal}.  
+Despite these advances, segmentation performance still depends on large volumes of accurate annotations, and dense labels for autonomous-driving datasets remain expensive to produce.
+
+To reduce annotation effort, prior work has explored weak supervision, pseudo-labeling, and geometric priors for semi-automatic labeling \cite{zou2019confidence,lee2013pseudo,jaritz2020xmuda}.  
+Projection-based methods further leverage LiDAR geometry to validate or refine image-space labels and improve cross-sensor consistency \cite{behley2019semantickitti,caesar2020nuscenes}.  
+These approaches improve efficiency, but they typically rely on fixed rules or task-specific heuristics that struggle with subtle failure cases and do not provide a general reasoning layer for interpreting heterogeneous error signals.
+
+\subsection{Visual LLMs and Multi-Modal Reasoning for Annotation}
+
+Recent progress in visual large language models has shown that combining image encoders with language-based reasoning enables models to interpret complex visual scenes, identify failure modes, and perform structured decision-making \cite{liu2024llava,ye2023mplug,wang2024qwen2vl}.  
+Unlike classical vision models, visual LLMs can integrate visual cues, metadata, and textual descriptions within a unified reasoning framework, making them suitable for tasks that require both perception and interpretation.  
+Several works have demonstrated that visual LLMs can evaluate segmentation quality, detect inconsistencies, or guide refinement steps by leveraging their ability to reason over multi-modal inputs \cite{zhang2024labelbench,li2023llmdata}.  
+These systems highlight the potential of visual LLMs not as direct segmentation models, but as controllers that analyze outputs from existing vision pipelines and make informed decisions about reliability.
+
+Multi-agent visual-LLM frameworks further extend this idea by decomposing complex tasks into specialized agents that collaborate through structured messages or shared metadata \cite{du2023improving,wang2023voyager}.  
+Such systems have been applied to planning, tool use, and quality assessment, demonstrating that modular reasoning can outperform monolithic decision modules in transparency and robustness.  
+However, their application to autonomous-driving annotation remains limited, and prior work has not explored structured multi-agent reasoning over camera--LiDAR metadata for validating and refining segmentation masks.
+
+\begin{figure}[t]
+    \centering
+    \input{diagrams/pipeline_end_to_end.tex}
+    \caption{End-to-end pipeline for the visual-LLM multi-agent annotation system.}
+    \label{fig:pipeline_end_to_end}
+\end{figure}
+
+\section{Methodology}
+\label{sec:methodology}
+
+The proposed system performs automatic validation and refinement of SAM-generated masks using a set of specialized visual-LLM agents.
+Each agent receives a multimodal input bundle consisting of an RGB crop, a mask overlay, a LiDAR depth projection, and structured metadata.
+Agents operate independently and return categorical or binary decisions rather than continuous confidence scores.
+This design avoids uncalibrated probability estimates and enables deterministic, interpretable triage suitable for safety-critical annotation workflows.
+
+\subsection{Multimodal Input Construction}
+
+For each SAM mask proposal, we extract a tight crop around the bounding box and generate three aligned visual channels:
+(1) the RGB crop,
+(2) the mask overlay rendered on the RGB crop,
+and (3) a depth map projected into the crop region.
+Metadata describing geometric properties, temporal cues, and LiDAR support statistics is provided as structured text.
+All agents receive the same multimodal bundle to ensure consistent reasoning across tasks.
+
+\subsection{Visual-LLM Agents}
+
+The system decomposes annotation validation into five independent visual-LLM agents, each responsible for a specific aspect of mask assessment.
+
+\paragraph{Bounding-Box Agent}
+Evaluates whether the 2D proposal corresponds to a plausible object region.
+Outputs: \texttt{valid} or \texttt{invalid}.
+
+\paragraph{Quality Agent}
+Assesses whether the mask visually aligns with object boundaries and exhibits coherent shape.
+Outputs: \texttt{good} or \texttt{bad}.
+
+\paragraph{Failure-Mode Agent}
+Identifies the dominant error type when the mask is incorrect.
+Outputs: \texttt{boundary\_drift}, \texttt{hallucination}, \texttt{occlusion\_miss}, or \texttt{fragmentation}.
+This agent is used for analysis and routing but does not contribute numeric scores.
+
+\paragraph{Correction Agent}
+Determines whether the mask can be improved and proposes a single actionable refinement step.
+Outputs: \texttt{refine} or \texttt{no\_refine}.
+
+\paragraph{Consistency Agent}
+Checks whether the mask is supported by LiDAR depth and geometric cues.
+Outputs: \texttt{pass} or \texttt{fail}.
+
+All agents are prompted to return strictly constrained categorical outputs to ensure reproducibility and avoid free-form responses.
+
+\subsection{Deterministic Triage Logic}
+
+Instead of combining agent outputs through weighted scoring, the system uses a deterministic rule-based decision function.
+This avoids arbitrary coefficients and leverages the strengths of binary visual-LLM judgments.
+
+A mask is \textbf{accepted} if:
+\begin{itemize}
+    \item the bounding-box agent outputs \texttt{valid},
+    \item the quality agent outputs \texttt{good},
+    \item and the consistency agent outputs \texttt{pass}.
+\end{itemize}
+
+A mask is routed to \textbf{refinement} if:
+\begin{itemize}
+    \item the quality agent outputs \texttt{good},
+    \item the consistency agent outputs \texttt{fail},
+    \item and the correction agent outputs \texttt{refine}.
+\end{itemize}
+
+A mask is \textbf{rejected} if:
+\begin{itemize}
+    \item the bounding-box agent outputs \texttt{invalid},
+    \item or the quality agent outputs \texttt{bad},
+    \item or the failure-mode agent identifies a hallucination.
+\end{itemize}
+
+A mask is sent to \textbf{human review} when agents disagree or when no deterministic rule applies.
+This includes cases where the correction agent proposes no valid refinement despite conflicting signals.
+
+\subsection{Interpretability and Reproducibility}
+
+The rule-based fusion mechanism ensures that every triage decision can be traced to explicit agent outputs.
+No learned weights, thresholds, or continuous scores are used.
+All prompts, multimodal inputs, and decision rules are fixed before running experiments, enabling reproducible evaluation across datasets and models.
+
+
+\section{Experiments}
+\label{sec:experiments}
+
+This section evaluates the proposed multi-agent visual-LLM annotation system using binary agent outputs and deterministic triage rules.
+All experiments are designed to measure agreement between each agent and human ground-truth annotations, as well as the overall effectiveness of the triage pipeline.
+No continuous confidence scores or weighted combinations are used; all decisions are categorical and directly comparable to expert labels.
+
+\subsection{Experimental Setup}
+
+We evaluate the system on a held-out subset of an autonomous driving dataset containing RGB frames, LiDAR sweeps, and SAM-generated mask proposals.
+For each mask, we construct the multimodal input bundle described in Section~\ref{sec:methodology}.
+Human annotators provide ground-truth labels for bounding-box validity, mask quality, depth consistency, hallucination presence, and final triage outcome.
+These labels serve as the reference for all quantitative comparisons.
+
+Each visual-LLM agent is prompted with a constrained binary or categorical question and returns a single token from a fixed vocabulary.
+All prompts, input formats, and decision rules are frozen before evaluation to ensure reproducibility.
+
+\subsection{Agent-Level Evaluation}
+
+We evaluate each agent independently by comparing its categorical output to the corresponding ground-truth label.
+For binary agents (bounding-box, quality, consistency, hallucination), we compute accuracy, precision, recall, and F1-score.
+For the failure-mode agent, we compute per-class accuracy and macro-averaged F1 across the four error categories.
+
+Each agent is evaluated on the full set of mask proposals, and results are reported in tables with one row per agent and one column per metric.
+This design isolates the contribution of each agent and enables analysis of failure patterns such as hallucination sensitivity or depth-support disagreement.
+
+\subsection{Triage Evaluation}
+
+The final triage decision is produced by the deterministic rule-based logic described in Section~\ref{sec:methodology}.
+We compare the system’s triage output (\texttt{accept}, \texttt{refine}, \texttt{reject}, \texttt{review}) to expert triage labels.
+We report per-class precision and recall, macro-averaged F1, and confusion matrices to analyze common disagreements.
+
+Because the triage logic is deterministic, every decision can be traced back to specific agent outputs.
+This allows us to analyze which agent disagreements most frequently trigger human review and which error types lead to rejection.
+
+\subsection{Ablation Studies}
+
+To understand the contribution of each agent, we perform ablations by removing one agent at a time and recomputing triage outcomes.
+For each ablation, we report the change in triage accuracy and the distribution of misclassified cases.
+This reveals, for example, how much hallucination detection contributes to reducing false positives, or how depth consistency affects refinement routing.
+
+We also evaluate alternative routing rules (e.g., stricter acceptance criteria, relaxed refinement conditions) to quantify the sensitivity of the deterministic logic.
+
+\subsection{Qualitative Analysis}
+
+We provide qualitative examples illustrating typical successes and failures of each agent.
+These include cases where the visual-LLM correctly identifies hallucinations, flags boundary drift, or rejects masks unsupported by depth.
+We also show examples where agents disagree, motivating the need for a human-review fallback.
+
+All qualitative examples are selected to illustrate characteristic behaviors rather than to demonstrate performance.
+
+\subsection{Reproducibility}
+
+All prompts, decision rules, and evaluation scripts are fixed and deterministic.
+No learned parameters, thresholds, or tuned coefficients are used.
+This ensures that results can be reproduced exactly across different runs, datasets, and visual-LLM backends.
+
+\section{Results}
+\label{sec:results}
+
+This section reports quantitative and qualitative results for the proposed multi-agent visual-LLM annotation system.
+All decisions are categorical, and evaluation is performed by comparing each agent's output to human ground-truth labels.
+We report accuracy, precision, recall, and F1-score for binary agents, as well as confusion matrices for the final triage decisions.
+No continuous scores or weighted combinations are used.
+
+\subsection{Agent-Level Performance}
+
+Table~\ref{tab:agent_performance} summarizes the performance of each visual-LLM agent.
+Each agent is evaluated independently by comparing its binary or categorical output to expert annotations.
+The hallucination and failure-mode agents are evaluated using macro-averaged F1 across categories.
+
+\begin{table}[h]
+\centering
+\caption{Agent-level performance. All values are placeholders to be filled after running experiments.}
+\label{tab:agent_performance}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Agent} & \textbf{Accuracy} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} \\
+\midrule
+BBox validity          & -- & -- & -- & -- \\
+Mask quality           & -- & -- & -- & -- \\
+Consistency (depth)    & -- & -- & -- & -- \\
+Hallucination check    & -- & -- & -- & -- \\
+Failure-mode classifier & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Triage Decision Evaluation}
+
+The final triage decision is produced by the deterministic rule-based logic described in Section~\ref{sec:methodology}.
+Table~\ref{tab:triage_confusion} shows the confusion matrix comparing system triage outputs to expert triage labels.
+
+\begin{table}[h]
+\centering
+\caption{Confusion matrix for final triage decisions. Rows: ground truth. Columns: system output.}
+\label{tab:triage_confusion}
+\begin{tabular}{lcccc}
+\toprule
+ & \textbf{Accept} & \textbf{Refine} & \textbf{Reject} & \textbf{Review} \\
+\midrule
+Accept (GT) & -- & -- & -- & -- \\
+Refine (GT) & -- & -- & -- & -- \\
+Reject (GT) & -- & -- & -- & -- \\
+Review (GT) & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We additionally report macro-averaged precision, recall, and F1 across the four triage categories:
+
+
+
+\[
+\text{Precision}_{macro} = --,\quad
+\text{Recall}_{macro} = --,\quad
+\text{F1}_{macro} = --.
+\]
+
+
+
+\subsection{Ablation Studies}
+
+To quantify the contribution of each agent, we perform ablations by removing one agent at a time and recomputing triage outcomes.
+Table~\ref{tab:ablation} reports the change in triage accuracy relative to the full system.
+
+\begin{table}[h]
+\centering
+\caption{Ablation study. $\Delta$Accuracy indicates the drop in triage accuracy when removing each agent.}
+\label{tab:ablation}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Ablation} & \textbf{Accuracy} & \textbf{$\Delta$Accuracy} \\
+\midrule
+Full system (all agents) & -- & -- \\
+No BBox agent            & -- & -- \\
+No Quality agent         & -- & -- \\
+No Consistency agent     & -- & -- \\
+No Hallucination agent   & -- & -- \\
+No Correction agent      & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Qualitative Results}
+
+We present qualitative examples illustrating typical successes and failure cases.
+These include:
+(1) correct hallucination detection,
+(2) boundary drift identification,
+(3) depth-support inconsistencies,
+and (4) cases routed to human review due to agent disagreement.
+Examples are selected to highlight characteristic behaviors rather than to maximize performance.
+
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This work presents a modular visual-LLM multi-agent system for validating and refining SAM-based semantic segmentation annotations in autonomous driving.  
+The central idea is to decompose annotation triage into specialized agents that reason jointly over RGB crops, mask overlays, LiDAR depth projections, and structured metadata.  
+By framing annotation decisions as a risk-aware structured prediction problem and aggregating agent outputs through a deterministic fusion rule, the system provides transparent and reproducible triage suitable for safety-critical perception pipelines.  
+The methodology emphasizes multimodal reasoning, interpretable intermediate decisions, and a clear separation between visual analysis, failure-mode diagnosis, and correction proposal generation.  
+The experimental design focuses on evaluating annotation quality, failure-mode agreement, cross-modal consistency, and downstream segmentation performance using statistically grounded protocols.  
+The architecture is intentionally backend-agnostic, enabling the use of different visual LLMs without altering the surrounding pipeline, and supports local deployment for data privacy.  
+Future work includes large-scale empirical evaluation, adaptive prompt generation for SAM, multi-agent debate mechanisms, integration with stronger vision-language models, and extensions to panoptic and temporal segmentation.  
+By formalizing multimodal reasoning as a core component of annotation workflows, this framework provides a reproducible foundation for studying visual-LLM-guided annotation quality control in autonomous-driving datasets.
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

@@ -1,0 +1,45 @@
+\begin{tikzpicture}[
+  >=Stealth,
+  node distance=6mm,
+  every node/.style={font=\small},
+  block/.style={draw, rounded corners, align=center, minimum width=34mm, minimum height=8mm, fill=blue!10},
+  stage/.style={draw, rounded corners, align=center, minimum width=34mm, minimum height=8mm, fill=green!12},
+  agent/.style={draw, rounded corners, align=center, minimum width=34mm, minimum height=8mm, fill=purple!12},
+  decision/.style={draw, rounded corners, align=center, minimum width=40mm, minimum height=9mm, fill=yellow!18},
+  sideagent/.style={draw, rounded corners, align=center, minimum width=30mm, minimum height=8mm, fill=purple!10}
+]
+
+  % Main pipeline
+  \node[block] (input) {Input Frame\\Camera + LiDAR + 2D Proposals};
+
+  \node[stage, below=of input] (sam) {SAM Mask Generation};
+
+  \node[stage, below=of sam] (multi)
+  {Multimodal Input Construction\\RGB Crop + Mask Overlay + Depth Map + Metadata};
+
+  % Main agent sequence
+  \node[agent, below=of multi] (a1) {BBox Agent (Visual-LLM)};
+  \node[agent, below=of a1] (a2) {Quality Agent (Visual-LLM)};
+  \node[agent, below=of a2] (a5) {Consistency Agent (Visual-LLM)};
+  \node[agent, below=of a5] (a4) {Correction Agent (Visual-LLM)};
+
+  % Failure-mode agent (side)
+  \node[sideagent, right=16mm of a2] (a3) {Failure-Mode Agent};
+
+  % Final triage
+  \node[decision, below=of a4, minimum width=48mm]
+  (triage) {Rule-Based Triage Decision\\accept / refine / reject / review};
+
+  % Arrows: pipeline
+  \draw[->] (input) -- (sam);
+  \draw[->] (sam) -- (multi);
+  \draw[->] (multi) -- (a1);
+  \draw[->] (a1) -- (a2);
+  \draw[->] (a2) -- (a5);
+  \draw[->] (a5) -- (a4);
+  \draw[->] (a4) -- (triage);
+
+  % Arrows: failure-mode agent
+  \draw[->] (a3.south west) -- (triage.north east);
+
+\end{tikzpicture}
