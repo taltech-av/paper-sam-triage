@@ -21,7 +21,7 @@ class OllamaClient(VLMClient):
                 }
             ],
             "stream": False,
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_ctx": 4096},
         }
         resp = requests.post(
             f"{self.base_url}/api/chat",
