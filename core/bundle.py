@@ -18,7 +18,6 @@ class Bundle:
     rgb_crop: Image.Image        # tight bbox crop of camera image
     overlay_crop: Image.Image    # same crop with mask rendered on top
     depth_crop: Image.Image      # same crop from lidar_png (768px, resized to match)
-    context_image: Image.Image   # full 768px frame with bbox drawn — for scene context
     metadata: dict               # structured text fields for the VLM prompt
 
 
@@ -86,9 +85,6 @@ def build_bundle(
     overlay_bgr    = _ensure_min_size(overlay_bgr)
     lidar_crop_bgr = _ensure_min_size(lidar_crop_bgr)
 
-    # Context image: full 768px frame with bbox highlighted — gives scene context
-    context_bgr = _draw_context(camera_img, proposal)
-
     source = "4k" if original_4k is not None else "768px"
     w_out, h_out = rgb_crop_bgr.shape[1], rgb_crop_bgr.shape[0]
 
@@ -109,22 +105,8 @@ def build_bundle(
         rgb_crop=_bgr_to_pil(rgb_crop_bgr),
         overlay_crop=_bgr_to_pil(overlay_bgr),
         depth_crop=_bgr_to_pil(lidar_crop_bgr),
-        context_image=_bgr_to_pil(context_bgr),
         metadata=metadata,
     )
-
-
-def _draw_context(camera_img: np.ndarray, proposal: MaskProposal) -> np.ndarray:
-    """Full 768px frame with a coloured bbox rectangle marking the object location.
-
-    Deliberately no class label text: the bbox agent must classify the region
-    blind, and a printed label would leak the expected answer to the VLM.
-    """
-    ctx = camera_img.copy()
-    x1, y1, x2, y2 = proposal.bbox
-    color = CLASS_COLORS_BGR.get(proposal.class_id, (255, 255, 255))
-    cv2.rectangle(ctx, (x1, y1), (x2, y2), color, 2)
-    return ctx
 
 
 def _load_original(frame_id: str) -> Optional[np.ndarray]:

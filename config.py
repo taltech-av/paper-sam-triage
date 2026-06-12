@@ -75,9 +75,6 @@ OLLAMA_MODEL = "qwen2.5vl:7b"
 VLM_TIMEOUT = 60          # seconds per call
 VLM_MAX_RETRIES = 1
 
-# --- Processing ---
-WORKERS = 1               # parallel frame workers (increase if GPU allows)
-
 # --- Metadata pre-filter (skip VLM entirely) ---
 # Only skip VLM for cases where the answer is unambiguous from geometry alone.
 # Everything else goes to VLM so we can measure its actual contribution.
