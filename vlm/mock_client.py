@@ -21,8 +21,8 @@ class MockClient(VLMClient):
         idx = int(digest[:4], 16) % 4  # 0-3
 
         # Pick response from valid vocab based on which agent is being called
-        if "VALID or INVALID" in prompt:
-            return ["valid", "invalid", "valid", "valid"][idx]
+        if "one word from the list" in prompt:  # bbox forced-choice classification
+            return ["vehicle", "vegetation", "sign", "pedestrian"][idx]
         if "GOOD or BAD" in prompt:
             return ["good", "bad", "good", "good"][idx]
         if "BOUNDARY_DRIFT" in prompt:

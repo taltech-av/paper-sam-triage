@@ -115,14 +115,15 @@ def build_bundle(
 
 
 def _draw_context(camera_img: np.ndarray, proposal: MaskProposal) -> np.ndarray:
-    """Full 768px frame with a coloured bbox rectangle marking the object location."""
+    """Full 768px frame with a coloured bbox rectangle marking the object location.
+
+    Deliberately no class label text: the bbox agent must classify the region
+    blind, and a printed label would leak the expected answer to the VLM.
+    """
     ctx = camera_img.copy()
     x1, y1, x2, y2 = proposal.bbox
     color = CLASS_COLORS_BGR.get(proposal.class_id, (255, 255, 255))
     cv2.rectangle(ctx, (x1, y1), (x2, y2), color, 2)
-    label = proposal.class_name
-    cv2.putText(ctx, label, (x1, max(y1 - 4, 12)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
     return ctx
 
 

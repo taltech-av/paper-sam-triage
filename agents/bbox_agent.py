@@ -1,25 +1,54 @@
-from agents.base import BaseAgent, _meta_text
+import re
+from typing import Optional
+
+from agents.base import BaseAgent
 from core.bundle import Bundle
+
+# Forced-choice vocabulary: the four annotation classes plus the surfaces SAM
+# typically leaks onto. Asking "what is this?" makes the model commit to an
+# answer; a yes/no presence question invites agreement and accepts noise blobs.
+CLASSES = ("vehicle", "sign", "cyclist", "pedestrian")
+# Concrete non-object surfaces: answering one of these is positive evidence
+# that the mask covers background, strong enough to reject on its own.
+STRONG_DISTRACTORS = ("vegetation", "building", "sky", "snow")
+# Weak distractors: absence of confirmation, needs corroboration. ROAD is the
+# dominant background of every crop, so it is the most error-prone answer for
+# tiny objects and must never reject alone.
+WEAK_DISTRACTORS = ("road", "other", "unclear")
 
 
 class BBoxAgent(BaseAgent):
-    VALID_OUTPUTS = ("invalid", "valid")  # invalid first — "invalid" contains "valid"
-    SAFE_DEFAULT = "valid"  # benefit of the doubt — ZOD GT already confirmed object presence
+    VALID_OUTPUTS = ("valid", "invalid", "background")
+    SAFE_DEFAULT = "valid"  # benefit of the doubt — concordance rule guards rejection
 
     def select_images(self, bundle: Bundle) -> list:
-        # Full frame context first so the model sees the driving scene,
-        # then the tight crop so it can inspect the specific region
-        return [bundle.context_image, bundle.rgb_crop]
+        # Crop only. The full-frame context image makes a 7B VLM classify the
+        # scene instead of the marked region ("highway -> vehicle").
+        return [bundle.rgb_crop]
 
     def build_prompt(self, bundle: Bundle) -> str:
-        return (
-            "You are checking a bounding-box proposal from an autonomous driving scene.\n\n"
-            "Image 1: full camera frame with the bounding box marked.\n"
-            "Image 2: zoomed crop of that bounding box region.\n\n"
-            f"{_meta_text(bundle)}\n\n"
-            "Reply VALID if any real object of the stated class is visible inside the "
-            "marked box — even if small, distant, or partially occluded.\n\n"
-            "Reply INVALID only if the marked box clearly contains nothing but road "
-            "surface, sky, or flat background with absolutely no object of the stated class.\n\n"
-            "Reply with exactly one word: VALID or INVALID"
+        # Blind classification: the prompt must not mention the proposed class —
+        # telling the model what to expect makes it parrot that answer back.
+        self._expected_class = bundle.metadata["class_name"]
+        options = ", ".join(
+            t.upper() for t in CLASSES + STRONG_DISTRACTORS + WEAK_DISTRACTORS
         )
+        return (
+            "This is a zoomed crop from an autonomous driving camera.\n"
+            f"What does it mainly show? Choose one: {options}\n"
+            "If the crop is blurry, dark, featureless, or shows no distinct "
+            "object, reply UNCLEAR.\n"
+            "Reply with exactly one word from the list."
+        )
+
+    def parse(self, raw: str) -> Optional[str]:
+        lower = raw.lower()
+        tokens = CLASSES + STRONG_DISTRACTORS + WEAK_DISTRACTORS
+        found = {t for t in tokens if re.search(rf"\b{t}s?\b", lower)}
+        if not found:
+            return None  # unparseable → retry, then SAFE_DEFAULT
+        if self._expected_class in found:
+            return "valid"
+        if found & set(STRONG_DISTRACTORS):
+            return "background"
+        return "invalid"

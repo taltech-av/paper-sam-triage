@@ -1,19 +1,38 @@
 from pathlib import Path
 
 # --- Data paths ---
+# HPC: DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
 DATA_ROOT = Path("/run/media/tom/ml/zod_temp")
 CAMERA_DIR = DATA_ROOT / "camera"
 LIDAR_DIR = DATA_ROOT / "lidar_png"
 ANNOTATION_SAM_DIR = DATA_ROOT / "annotation_sam"
-FRAMES_FILE = Path(__file__).parent / "frames" / "frames.txt"
+FRAMES_FILE = Path(__file__).parent / "frames" / "bad_frames.csv"
 
 # Original 4K ZOD images — used instead of 768px camera/ when available
 # Set to None to always use the downscaled camera/ images
+# HPC: ZOD_DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod-data/single_frames")
 ZOD_DATA_ROOT = Path("/run/media/tom/ml/zod-data/single_frames")
 
-OUTPUT_ROOT = DATA_ROOT
-ANNOTATION_OUT_DIR = OUTPUT_ROOT / "annotation_vllm"
-RESULTS_DIR = OUTPUT_ROOT / "vllm_results"
+# All pipeline outputs live under one folder
+OUTPUT_ROOT = DATA_ROOT / "vlm"
+ANNOTATION_OUT_DIR = OUTPUT_ROOT / "annotation"      # refined masks (uint8 PNG)
+RESULTS_DIR = OUTPUT_ROOT / "results"                # per-frame JSON + summary
+VIS_DIR = OUTPUT_ROOT / "visualization"              # triage overlay images
+
+
+def use_hpc():
+    """Switch all data paths to HPC. Call before any I/O."""
+    global DATA_ROOT, CAMERA_DIR, LIDAR_DIR, ANNOTATION_SAM_DIR
+    global ZOD_DATA_ROOT, OUTPUT_ROOT, ANNOTATION_OUT_DIR, RESULTS_DIR, VIS_DIR
+    DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
+    CAMERA_DIR = DATA_ROOT / "camera"
+    LIDAR_DIR = DATA_ROOT / "lidar_png"
+    ANNOTATION_SAM_DIR = DATA_ROOT / "annotation_sam"
+    ZOD_DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod-data/single_frames")
+    OUTPUT_ROOT = DATA_ROOT / "vlm"
+    ANNOTATION_OUT_DIR = OUTPUT_ROOT / "annotation"
+    RESULTS_DIR = OUTPUT_ROOT / "results"
+    VIS_DIR = OUTPUT_ROOT / "visualization"
 
 # --- Class definitions ---
 CLASS_ID_TO_NAME = {
@@ -62,6 +81,13 @@ WORKERS = 1               # parallel frame workers (increase if GPU allows)
 # --- Metadata pre-filter (skip VLM entirely) ---
 # Only skip VLM for cases where the answer is unambiguous from geometry alone.
 # Everything else goes to VLM so we can measure its actual contribution.
-AUTO_ACCEPT_LARGE_PIXELS = 5000   # clearly real: SAM can't produce 5K+ px on a ZOD bbox by mistake
+# NOTE: there is deliberately no auto-accept for large masks — on flagged frames
+# the largest connected components are often exactly the leaked noise blobs.
 AUTO_REJECT_MAX_ASPECT = 6.0      # clearly leaked: extreme horizontal/vertical bleed
 AUTO_REJECT_MIN_ASPECT = 0.12     # clearly leaked: extreme horizontal/vertical bleed
+
+# --- Deterministic consistency check ---
+# Fraction of mask pixels with LiDAR returns below which the mask is flagged
+# as geometrically unsupported. Real masks on ZOD have median support ~0.63
+# and <1.5% of them fall below 0.1, so this only fires on sky/void leaks.
+LIDAR_SUPPORT_MIN = 0.10

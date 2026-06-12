@@ -2,24 +2,30 @@
 """
 Main entry point: runs the VLM multi-agent triage pipeline over frames/frames.txt.
 
-Design goal: VLM validates the vast majority of masks so we can measure its contribution.
-Only extreme-geometry cases are rejected/accepted by metadata alone.
+Every mask is judged on its own zoomed crop — never via numbered boxes on the
+full frame, which a 7B VLM cannot resolve for 10–30 px objects. Rejection is
+destructive (pixels zeroed), so it requires two concordant negative signals;
+a single negative routes to human review instead.
 
-Pipeline:
-  1. Metadata pre-filter  — reject malformed shapes; accept only very large masks (>5000px)
-  2. Batch bbox per class  — 1 VLM call per class per frame, all remaining masks together
-  3. Fast quality check    — 1 VLM call per bbox-valid mask (overlay crop only)
+Pipeline per mask:
+  1. Metadata pre-filter        — reject extreme geometry; accept very large masks
+  2. Consistency check (free)   — deterministic LiDAR support threshold
+  3. BBox agent (VLM)           — object presence on the zoomed crop
+  4. Quality agent (VLM)        — mask/object alignment on the overlay crop
+     (skipped when bbox=invalid AND consistency=fail — already 2 negatives)
+  5. Correction agent (VLM)     — only on the refine path (good + fail)
+  6. core/triage.py             — concordance rules → accept/refine/reject/review
 
 Usage:
     python process_frames.py
     python process_frames.py --resume --limit 20
     python process_frames.py --mock --limit 3
+    python process_frames.py --diagnose          # run failure-mode agent on negatives
 """
 
 import argparse
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
 
 import cv2
@@ -28,6 +34,10 @@ from PIL import Image
 from tqdm import tqdm
 
 import config
+from agents.bbox_agent import BBoxAgent
+from agents.consistency_agent import ConsistencyAgent
+from agents.correction_agent import CorrectionAgent
+from agents.failure_mode_agent import FailureModeAgent
 from agents.quality_agent import QualityAgent
 from core.bundle import build_bundle, Bundle
 from core.mask_extractor import MaskProposal, extract_proposals
@@ -36,7 +46,7 @@ from core.triage import (
 )
 from output.annotation_writer import write_annotation
 from output.results_writer import write_frame_result, write_summary
-from vlm.client import VLMClient, encode_image_b64
+from vlm.client import VLMClient
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -62,8 +72,14 @@ def check_ollama(model: str) -> None:
         sys.exit(f"  ERROR: cannot reach Ollama at {config.OLLAMA_URL} — {e}")
 
 
-def _bgr_to_pil(img: np.ndarray) -> Image.Image:
-    return Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+def build_agents(vlm: VLMClient) -> dict:
+    return {
+        "bbox": BBoxAgent(vlm),
+        "quality": QualityAgent(vlm),
+        "consistency": ConsistencyAgent(),       # deterministic, no VLM
+        "correction": CorrectionAgent(vlm),
+        "failure_mode": FailureModeAgent(vlm),   # diagnostic only
+    }
 
 
 # ── Stage 1: metadata pre-filter ─────────────────────────────────────────────
@@ -73,13 +89,11 @@ def metadata_verdict(proposal: MaskProposal, bundle: Bundle) -> str | None:
     Return 'accept' or 'reject' only when the answer is unambiguous from geometry.
     Everything else returns None → VLM verification.
 
-    VLM must see the vast majority of masks so we can measure its contribution.
-
     Tiers:
       1. Extreme aspect ratio  → reject  (mask leaked into adjacent region — VLM can't help)
       2. Below class minimum   → reject  (sub-threshold noise)
-      3. Very large (>5000px)  → accept  (SAM cannot produce 5K+ px on a ZOD bbox by mistake)
-      4. Everything else       → VLM
+      3. Everything else       → VLM    (large masks included: on flagged frames the
+                                         biggest components are often leaked noise blobs)
     """
     px = proposal.pixel_count
     ar = bundle.metadata["aspect_ratio"]
@@ -91,79 +105,33 @@ def metadata_verdict(proposal: MaskProposal, bundle: Bundle) -> str | None:
     if px < min_px:
         return TRIAGE_REJECT
 
-    if px >= config.AUTO_ACCEPT_LARGE_PIXELS:
-        return TRIAGE_ACCEPT
-
     return None  # → VLM
 
 
-# ── Stage 2: batch bbox per class ────────────────────────────────────────────
+# ── Stage 2: per-mask agent triage ───────────────────────────────────────────
 
-def _draw_numbered_context(
-    camera_img: np.ndarray,
-    proposals: list[MaskProposal],
-) -> np.ndarray:
-    """Draw numbered bbox rectangles for a single class onto camera_img."""
-    ctx = camera_img.copy()
-    class_id = proposals[0].class_id
-    color = config.CLASS_COLORS_BGR.get(class_id, (255, 255, 255))
-    for i, p in enumerate(proposals):
-        x1, y1, x2, y2 = p.bbox
-        cv2.rectangle(ctx, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(ctx, str(i + 1), (x1, max(y1 - 3, 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-    return ctx
+def triage_mask(agents: dict, bundle: Bundle, diagnose: bool) -> TriageResult:
+    """Run the agent cascade on one mask and combine via the triage rules."""
+    consistency_out = agents["consistency"].run(bundle)
+    bbox_out = agents["bbox"].run(bundle)
 
+    # Early exit: rejection already decided — skip the quality call.
+    # "background" = the VLM positively identified a non-object surface.
+    if bbox_out == "background" or (bbox_out == "invalid" and consistency_out == "fail"):
+        quality_out = None
+    else:
+        quality_out = agents["quality"].run(bundle)
 
-def _parse_number_list(text: str, max_n: int) -> set[int]:
-    """Extract 1-based box numbers from a free-form model response."""
-    import re
-    nums = {int(m) for m in re.findall(r"\b(\d+)\b", text)}
-    return {n for n in nums if 1 <= n <= max_n}
+    correction_out = None
+    if bbox_out == "valid" and quality_out == "good" and consistency_out == "fail":
+        correction_out = agents["correction"].run(bundle)
 
+    result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
 
-def batch_bbox_check(
-    vlm: VLMClient,
-    proposals: list[MaskProposal],
-    camera_img: np.ndarray,
-    class_name: str,
-) -> set[int]:
-    """
-    One VLM call for all proposals of one class.
-    Returns a set of 0-based proposal indices that are VALID.
-    """
-    ctx = _draw_numbered_context(camera_img, proposals)
-    img = _bgr_to_pil(ctx)
+    # Failure-mode diagnosis for non-accepted masks (analysis only)
+    if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
+        result.failure_mode_out = agents["failure_mode"].run(bundle)
 
-    prompt = (
-        f"This is an autonomous driving scene. {len(proposals)} bounding boxes are "
-        f"numbered 1–{len(proposals)} and each is supposed to contain a {class_name}.\n\n"
-        f"List only the box numbers where a real {class_name} is visible — even if "
-        f"small, distant, or partially occluded.\n"
-        f"Reply with only the valid box numbers separated by spaces. "
-        f"If none are valid reply with '0'."
-    )
-
-    try:
-        raw = vlm.query([img], prompt)
-        valid_1based = _parse_number_list(raw, len(proposals))
-        # fallback: if model returned nothing parseable, accept all (safe default)
-        if not valid_1based and "0" not in raw:
-            return set(range(len(proposals)))
-        return {n - 1 for n in valid_1based}  # convert to 0-based
-    except Exception:
-        return set(range(len(proposals)))  # on error, accept all
-
-
-# ── Stage 3: fast quality check ──────────────────────────────────────────────
-
-def fast_quality_check(quality_agent: QualityAgent, bundle: Bundle) -> str:
-    """Quality check using only the overlay crop — no full frame."""
-    # Temporarily override select_images to avoid sending context/depth
-    original = quality_agent.select_images
-    quality_agent.select_images = lambda b: [b.overlay_crop]
-    result = quality_agent.run(bundle)
-    quality_agent.select_images = original
     return result
 
 
@@ -171,11 +139,11 @@ def fast_quality_check(quality_agent: QualityAgent, bundle: Bundle) -> str:
 
 def process_frame(
     frame_id: str,
-    vlm: VLMClient,
-    quality_agent: QualityAgent,
+    agents: dict,
     ann_out_dir: Path,
     results_out_dir: Path,
     bar: tqdm,
+    diagnose: bool,
 ) -> dict:
     ann_path = config.ANNOTATION_SAM_DIR / f"{frame_id}.png"
     cam_path = config.CAMERA_DIR / f"{frame_id}.png"
@@ -195,77 +163,32 @@ def process_frame(
         write_annotation(frame_id, original_ann, [], [], ann_out_dir)
         return write_frame_result(frame_id, [], [], results_out_dir)
 
-    # Build bundles
-    bundles = [build_bundle(p, camera_img, lidar_img) for p in proposals]
+    t0 = time.time()
+    triage_results: list[TriageResult] = []
+    n_auto = 0
 
-    # ── Stage 1: metadata pre-filter ────────────────────────────────────────
-    verdicts: dict[int, str] = {}  # mask_id → decision
-    needs_vlm: list[int] = []      # indices into proposals list
+    for proposal in proposals:
+        bundle = build_bundle(proposal, camera_img, lidar_img)
 
-    for i, (p, b) in enumerate(zip(proposals, bundles)):
-        v = metadata_verdict(p, b)
-        if v is not None:
-            verdicts[i] = v
-        else:
-            needs_vlm.append(i)
+        verdict = metadata_verdict(proposal, bundle)
+        if verdict is not None:
+            n_auto += 1
+            triage_results.append(TriageResult(
+                decision=verdict,
+                bbox_out=None, quality_out=None, failure_mode_out=None,
+                correction_out=None, consistency_out=None,
+            ))
+            continue
 
-    # ── Stage 2: batch bbox per class ────────────────────────────────────────
-    t_bbox = time.time()
-    by_class: dict[int, list[int]] = defaultdict(list)
-    for i in needs_vlm:
-        by_class[proposals[i].class_id].append(i)
+        triage_results.append(triage_mask(agents, bundle, diagnose))
 
-    bbox_valid: set[int] = set()
-    for class_id, indices in by_class.items():
-        class_proposals = [proposals[i] for i in indices]
-        valid_local = batch_bbox_check(vlm, class_proposals, camera_img,
-                                       config.CLASS_ID_TO_NAME[class_id])
-        for local_idx in valid_local:
-            bbox_valid.add(indices[local_idx])
-        for local_idx in range(len(indices)):
-            if local_idx not in valid_local:
-                verdicts[indices[local_idx]] = TRIAGE_REJECT
-
-    n_classes = len(by_class)
+    counts = {d: sum(1 for r in triage_results if r.decision == d)
+              for d in (TRIAGE_ACCEPT, "refine", TRIAGE_REJECT, TRIAGE_REVIEW)}
     bar.write(
-        f"  {frame_id}  bbox batch: {n_classes} class calls  "
-        f"valid={len(bbox_valid)}/{len(needs_vlm)}  ({time.time()-t_bbox:.1f}s)"
+        f"  {frame_id}  accept={counts['accept']} refine={counts['refine']} "
+        f"reject={counts['reject']} review={counts['human_review']}  "
+        f"auto={n_auto}/{len(proposals)}  ({time.time()-t0:.1f}s)"
     )
-
-    # ── Stage 3: fast quality check per bbox-valid mask ──────────────────────
-    t_qual = time.time()
-    accepted = rejected_q = 0
-    for i in bbox_valid:
-        q = fast_quality_check(quality_agent, bundles[i])
-        if q == "good":
-            verdicts[i] = TRIAGE_ACCEPT
-            accepted += 1
-        else:
-            verdicts[i] = TRIAGE_REJECT
-            rejected_q += 1
-
-    bar.write(
-        f"  {frame_id}  quality: accept={accepted} reject={rejected_q}  "
-        f"({time.time()-t_qual:.1f}s)"
-    )
-
-    # ── Build TriageResult objects ────────────────────────────────────────────
-    triage_results = []
-    for i, p in enumerate(proposals):
-        decision = verdicts.get(i, TRIAGE_REVIEW)
-        triage_results.append(TriageResult(
-            decision=decision,
-            bbox_out="valid" if i in bbox_valid else ("invalid" if i in by_class.get(p.class_id, []) else None),
-            quality_out="good" if decision == TRIAGE_ACCEPT else ("bad" if i in bbox_valid else None),
-            failure_mode_out=None,
-            correction_out=None,
-            consistency_out=None,
-        ))
-
-    n_accept = sum(1 for r in triage_results if r.decision == TRIAGE_ACCEPT)
-    n_reject = sum(1 for r in triage_results if r.decision == TRIAGE_REJECT)
-    bar.write(f"  {frame_id}  done  accept={n_accept}  reject={n_reject}  "
-              f"auto={len(proposals)-len(needs_vlm)}/{len(proposals)} skipped VLM")
 
     write_annotation(frame_id, original_ann, proposals, triage_results, ann_out_dir)
     return write_frame_result(frame_id, proposals, triage_results, results_out_dir)
@@ -279,7 +202,14 @@ def main():
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--diagnose", action="store_true",
+                        help="run the failure-mode agent on rejected/review masks")
+    parser.add_argument("--hpc", action="store_true",
+                        help="use HPC data paths (totahv@base.hpc.taltech.ee)")
     args = parser.parse_args()
+
+    if args.hpc:
+        config.use_hpc()
 
     if args.mock:
         from vlm.mock_client import MockClient
@@ -291,7 +221,7 @@ def main():
         from vlm.ollama_client import OllamaClient
         vlm = OllamaClient(model=args.model)
 
-    quality_agent = QualityAgent(vlm)
+    agents = build_agents(vlm)
 
     frame_ids = load_frames()
     print(f"Frames: {len(frame_ids)} loaded")
@@ -313,8 +243,8 @@ def main():
     frame_records = []
     with tqdm(frame_ids, desc="Frames", unit="frame") as bar:
         for frame_id in bar:
-            record = process_frame(frame_id, vlm, quality_agent,
-                                   ann_out_dir, results_out_dir, bar)
+            record = process_frame(frame_id, agents, ann_out_dir,
+                                   results_out_dir, bar, args.diagnose)
             if record:
                 frame_records.append(record)
 

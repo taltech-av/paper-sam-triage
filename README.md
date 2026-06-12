@@ -23,7 +23,7 @@ This pipeline runs five specialized Visual-LLM agents over each SAM mask proposa
 | `reject` | Mask is invalid — zero out pixels |
 | `human_review` | Agents disagree — flag for manual inspection |
 
-The result is a refined `annotation_vllm/` folder that is a drop-in replacement for `annotation_sam/` in the fusion trainer.
+The result is a refined `vlm/annotation/` folder that is a drop-in replacement for `annotation_sam/` in the fusion trainer.
 
 ## Pipeline
 
@@ -36,20 +36,26 @@ annotation_sam/ + camera/ + lidar_png/
         ▼ core/bundle.py
   RGB crop + mask overlay + depth crop + metadata
         │
-        ├─► BBoxAgent      → valid / invalid
-        ├─► QualityAgent   → good / bad
-        ├─► FailureModeAgent → boundary_drift / hallucination / occlusion_miss / fragmentation
-        ├─► CorrectionAgent → refine / no_refine
-        └─► ConsistencyAgent → pass / fail
+        ├─► ConsistencyAgent → pass / fail               (deterministic LiDAR support, no VLM)
+        ├─► BBoxAgent        → valid / invalid /
+        │                      background               (VLM, blind forced-choice on zoomed crop)
+        ├─► QualityAgent     → good / bad               (VLM, overlay crop)
+        ├─► CorrectionAgent  → refine / no_refine   (VLM, refine path only)
+        └─► FailureModeAgent → boundary_drift / hallucination /
+                               occlusion_miss / fragmentation   (--diagnose, analysis only)
                 │
-                ▼ core/triage.py (deterministic rules)
+                ▼ core/triage.py (concordance rules)
           accept / refine / reject / human_review
                 │
         ┌───────┴────────┐
         ▼                ▼
-annotation_vllm/    vllm_results/
+vlm/annotation/     vlm/results/
   frame_N.png        frame_N.json + summary.json
 ```
+
+Every VLM judgment is made on a per-mask zoomed crop (≥224 px). Full-frame
+multi-object queries are never used — a 7B VLM cannot resolve 10–30 px objects
+or numbered box labels at full-frame scale, which causes mass false rejections.
 
 ## Class Encoding
 
@@ -85,23 +91,25 @@ zod_temp/
 
 Frame list lives in the repo at [frames/frames.txt](frames/frames.txt) — 2300 curated frames.
 
-Outputs written to:
+Outputs written to a single `vlm/` folder:
 
 ```
 zod_temp/
-├── annotation_vllm/                  # refined masks — same uint8 PNG format as annotation_sam
-├── vllm_results/
-│   ├── frame_XXXXXX.json             # per-mask agent decisions and triage outcome
-│   └── summary.json                  # aggregate counts by class and triage decision
-└── vllm_results_visualizations/      # camera image with green (accepted) / red (rejected) overlays
-    └── frame_XXXXXX.png
+└── vlm/
+    ├── annotation/                # refined masks — same uint8 PNG format as annotation_sam
+    │   └── frame_XXXXXX.png
+    ├── results/
+    │   ├── frame_XXXXXX.json      # per-mask agent decisions and triage outcome
+    │   └── summary.json           # aggregate counts by class and triage decision
+    └── visualization/             # camera image with triage overlays
+        └── frame_XXXXXX.png       # green=accept, yellow=refine, red=reject, blue=review
 ```
 
 ## Usage
 
 **Dry run with mock VLM (no GPU needed):**
 ```bash
-python process_frames.py --mock --limit 10
+python process_frames.py --limit 10
 python visualize_results.py
 ```
 
@@ -123,9 +131,35 @@ python process_frames.py --resume
 ```
 --model     Ollama model name                    (default: qwen2.5vl:7b)
 --mock      Use deterministic mock client instead of Ollama
---resume    Skip frames with existing results in vllm_results/
+--resume    Skip frames with existing results in vlm/results/
 --limit N   Process at most N frames (0 = all)
+--diagnose  Run the failure-mode agent on rejected/review masks (analysis only)
 ```
+
+## HPC Deployment (A100 80 GB)
+
+Recommended Ollama VLMs for running on an A100 80 GB GPU (e.g. HPC cluster node).
+
+### Model Recommendations
+
+| Model | VRAM (Q4) |
+|---|---|
+| `qwen2.5vl:72b` | ~45 GB |
+| `llama3.2-vision:90b` | ~55 GB |
+
+### HPC Usage
+
+```bash
+# Pull models on the compute node (requires internet or a local Ollama registry)
+ollama pull qwen2.5vl:72b
+ollama pull llama3.2-vision:90b
+
+# Primary run — 72b model, all 2300 frames
+ollama run qwen2.5vl:72b &
+python process_frames.py --model qwen2.5vl:72b
+```
+
+On an A100 80 GB you can run `qwen2.5vl:72b` in Q4 (~45 GB) with headroom to spare. FP16 (~144 GB) requires two A100s with model sharding — Ollama handles this automatically when multiple GPUs are visible.
 
 ## Repository Structure
 
@@ -157,22 +191,42 @@ python process_frames.py --resume
 
 ## Triage Rules
 
-Implemented in [core/triage.py](core/triage.py) exactly as specified in the paper.
+Implemented in [core/triage.py](core/triage.py). Rejection is destructive
+(pixels are zeroed out), so it requires **two concordant negative signals**.
+Rejecting on any single negative compounds the false-positive rates of the
+individual judges (three judges at 10% FPR each would destroy ~27% of good
+masks) — and since the SAM masks are seeded from ZOD ground-truth boxes, true
+hallucinations are rare and single "reject" votes are mostly false positives.
 
-**Reject** (highest priority) if any of:
+**Reject** if at least two of:
 - BBox agent → `invalid`
 - Quality agent → `bad`
-- Failure-mode agent → `hallucination`
+- Consistency → `fail`
+
+**Reject** also when BBox agent → `background`: the model positively identified
+a concrete non-object surface (vegetation, building, sky, snow) under the mask.
+That is direct evidence of error and counts as two negatives on its own —
+unlike `invalid` (wrong class, road, unclear), which is mere absence of
+confirmation and needs corroboration.
+
+The BBox agent asks a *blind forced-choice* question ("what does this crop
+mainly show?") without revealing the proposed class — naming the expected class
+in the prompt or image makes the model parrot it back, and yes/no presence
+questions invite agreement. It sees only the zoomed crop: given the full frame,
+a 7B VLM classifies the scene instead of the region ("highway → vehicle").
 
 **Accept** if all of:
 - BBox → `valid`, Quality → `good`, Consistency → `pass`
 
 **Refine** if:
-- Quality → `good`, Consistency → `fail`, Correction → `refine`
+- BBox → `valid`, Quality → `good`, Consistency → `fail`, Correction → `refine`
 
-**Human review** — all other cases.
+**Human review** — all other cases (single negative signal). Review and refine
+masks are kept in the output annotation; only rejects are zeroed.
 
-Early exit is applied: an `invalid` bbox skips all remaining agents; a `bad` quality result only additionally runs the failure-mode agent for diagnostics before stopping.
+The failure-mode agent is diagnostic only (`--diagnose`) and never affects the
+decision. Early exit: when BBox → `invalid` and Consistency → `fail`, the
+rejection is already decided and the quality call is skipped.
 
 ## Switching VLM Backends
 

@@ -2,23 +2,27 @@
 """
 Generate per-frame visualizations of VLM triage results.
 
-For each processed frame, overlays accepted masks (green) and rejected masks (red)
-on top of the camera image. Refine = yellow, human_review = blue.
+Re-extracts the mask proposals from annotation_sam (deterministic, same order
+as during processing) and colors each one by its triage decision from
+vlm/results/frame_XXXXXX.json:
 
-Output: /run/media/tom/ml/zod_temp/vllm_results_visualizations/frame_XXXXXX.png
+    accept → green, refine → yellow, reject → red, human_review → blue
+
+Output: vlm/visualization/frame_XXXXXX.png under DATA_ROOT
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image
 from tqdm import tqdm
 
 import config
+from core.mask_extractor import extract_proposals
 
-VIS_DIR = config.DATA_ROOT / "vllm_results_visualizations"
+VIS_DIR = config.VIS_DIR
 
 # BGRA overlay colors (transparent)
 TRIAGE_COLORS = {
@@ -38,28 +42,26 @@ def overlay_mask(canvas_bgr: np.ndarray, mask: np.ndarray, bgra_color: tuple) ->
 
 
 def visualize_frame(frame_id: str, out_dir: Path) -> None:
-    ann_sam_path  = config.ANNOTATION_SAM_DIR  / f"{frame_id}.png"
-    ann_vllm_path = config.ANNOTATION_OUT_DIR  / f"{frame_id}.png"
-    cam_path      = config.CAMERA_DIR          / f"{frame_id}.png"
+    ann_sam_path = config.ANNOTATION_SAM_DIR / f"{frame_id}.png"
+    result_path  = config.RESULTS_DIR        / f"{frame_id}.json"
+    cam_path     = config.CAMERA_DIR         / f"{frame_id}.png"
 
-    if not cam_path.exists() or not ann_sam_path.exists() or not ann_vllm_path.exists():
+    if not cam_path.exists() or not ann_sam_path.exists() or not result_path.exists():
         return
 
     camera = cv2.imread(str(cam_path))
-    sam    = np.array(Image.open(ann_sam_path))
-    vllm   = np.array(Image.open(ann_vllm_path))
+    result = json.loads(result_path.read_text())
+    decisions = {m["mask_id"]: m["triage"] for m in result["masks"]}
+
+    proposals = extract_proposals(ann_sam_path, frame_id)
 
     canvas = camera.copy()
+    for p in proposals:
+        decision = decisions.get(p.mask_id)
+        color = TRIAGE_COLORS.get(decision)
+        if color is not None:
+            overlay_mask(canvas, p.pixel_mask, color)
 
-    # Pixels present in SAM but removed in VLLM → rejected
-    rejected_mask = (sam > 0) & (vllm == 0)
-    # Pixels kept in VLLM → accepted / refine / review (we don't distinguish here)
-    accepted_mask = vllm > 0
-
-    overlay_mask(canvas, accepted_mask, TRIAGE_COLORS["accept"])
-    overlay_mask(canvas, rejected_mask, TRIAGE_COLORS["reject"])
-
-    # Legend
     _draw_legend(canvas)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -69,7 +71,9 @@ def visualize_frame(frame_id: str, out_dir: Path) -> None:
 def _draw_legend(img: np.ndarray) -> None:
     entries = [
         ("accepted", TRIAGE_COLORS["accept"]),
+        ("refine",   TRIAGE_COLORS["refine"]),
         ("rejected", TRIAGE_COLORS["reject"]),
+        ("review",   TRIAGE_COLORS["human_review"]),
     ]
     x, y0, pad = 12, 12, 4
     h_entry = 22

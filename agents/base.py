@@ -6,7 +6,7 @@ from core.bundle import Bundle
 from vlm.client import VLMClient
 
 # Set to True to print raw VLM responses — useful for diagnosing unexpected rejections
-DEBUG_RAW_RESPONSES = True
+DEBUG_RAW_RESPONSES = False
 
 
 class BaseAgent(ABC):

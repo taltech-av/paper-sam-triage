@@ -4,7 +4,7 @@ from core.bundle import Bundle
 
 class FailureModeAgent(BaseAgent):
     VALID_OUTPUTS = ("boundary_drift", "hallucination", "occlusion_miss", "fragmentation")
-    SAFE_DEFAULT = "hallucination"  # conservative: causes reject
+    SAFE_DEFAULT = "boundary_drift"  # diagnostic only — never affects triage
 
     def build_prompt(self, bundle: Bundle) -> str:
         return (
