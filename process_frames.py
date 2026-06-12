@@ -65,9 +65,9 @@ def check_ollama(model: str) -> None:
         r.raise_for_status()
         names = [m["name"] for m in r.json().get("models", [])]
         if model not in names:
-            print(f"  WARNING: model '{model}' not found. Available: {names}")
-        else:
-            print(f"  Ollama reachable — model '{model}' found")
+            sys.exit(f"  ERROR: model '{model}' not loaded in Ollama. Available: {names}\n"
+                     f"  Run: ollama pull {model}")
+        print(f"  Ollama reachable — model '{model}' found")
     except Exception as e:
         sys.exit(f"  ERROR: cannot reach Ollama at {config.OLLAMA_URL} — {e}")
 

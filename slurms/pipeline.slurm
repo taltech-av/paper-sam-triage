@@ -13,11 +13,15 @@
 PIPELINE_DIR="/gpfs/mariana/smbhome/totahv/paper-vlm-annotation-pipeline"
 MODEL="qwen2.5vl:72b"
 
+export PATH="$HOME/bin:$PATH"
 export OLLAMA_HOST="0.0.0.0:11434"
 export OLLAMA_MODELS="/gpfs/mariana/smbhome/totahv/ollama_models"
 export LD_LIBRARY_PATH="$PIPELINE_DIR/cuda/lib64:$LD_LIBRARY_PATH"
 
 mkdir -p "$PIPELINE_DIR/logs"
+
+# ── Ollama ───────────────────────────────────────
+echo "[$(date)] Ollama version: $(ollama --version)"
 
 # ── Venv ───────────────────────────────────
 source "$PIPELINE_DIR/venv/bin/activate"
