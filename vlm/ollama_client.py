@@ -13,15 +13,20 @@ class OllamaClient(VLMClient):
     def query(self, images: list[Image.Image], prompt: str) -> str:
         payload = {
             "model": self.model,
-            "prompt": prompt,
-            "images": [encode_image_b64(img) for img in images],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [encode_image_b64(img) for img in images],
+                }
+            ],
             "stream": False,
             "options": {"temperature": 0},
         }
         resp = requests.post(
-            f"{self.base_url}/api/generate",
+            f"{self.base_url}/api/chat",
             json=payload,
             timeout=VLM_TIMEOUT,
         )
         resp.raise_for_status()
-        return resp.json().get("response", "").strip()
+        return resp.json()["message"]["content"].strip()
