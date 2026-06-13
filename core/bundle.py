@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from config import (
-    CLASS_COLORS_BGR, CROP_PADDING, MIN_CROP_SIZE, OVERLAY_ALPHA,
+    CLASS_COLORS_BGR, CROP_PADDING, MAX_CROP_SIZE, MIN_CROP_SIZE, OVERLAY_ALPHA,
     ZOD_DATA_ROOT,
 )
 from core.mask_extractor import MaskProposal
@@ -124,13 +124,18 @@ def _load_original(frame_id: str) -> Optional[np.ndarray]:
 
 
 def _ensure_min_size(img_bgr: np.ndarray) -> np.ndarray:
-    """Upscale if either dimension is below MIN_CROP_SIZE."""
+    """Clamp crop dimensions to [MIN_CROP_SIZE, MAX_CROP_SIZE]."""
     h, w = img_bgr.shape[:2]
-    if h >= MIN_CROP_SIZE and w >= MIN_CROP_SIZE:
-        return img_bgr
-    scale = max(MIN_CROP_SIZE / w, MIN_CROP_SIZE / h)
-    new_w, new_h = max(int(w * scale), MIN_CROP_SIZE), max(int(h * scale), MIN_CROP_SIZE)
-    return cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+    if h < MIN_CROP_SIZE or w < MIN_CROP_SIZE:
+        scale = max(MIN_CROP_SIZE / w, MIN_CROP_SIZE / h)
+        new_w = max(int(w * scale), MIN_CROP_SIZE)
+        new_h = max(int(h * scale), MIN_CROP_SIZE)
+        img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+        h, w = img_bgr.shape[:2]
+    if h > MAX_CROP_SIZE or w > MAX_CROP_SIZE:
+        scale = MAX_CROP_SIZE / max(h, w)
+        img_bgr = cv2.resize(img_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    return img_bgr
 
 
 def _compute_lidar_support(pixel_mask: np.ndarray, lidar_img: np.ndarray) -> float:

@@ -57,6 +57,9 @@ CROP_PADDING = 16
 
 # Minimum crop dimension sent to VLM (px). Crops smaller than this are upscaled.
 MIN_CROP_SIZE = 224
+# Maximum crop dimension sent to VLM (px). Crops larger than this are downscaled.
+# 4K source crops can be 2000px+ which wastes tokens; 512px is sufficient for a 7B model.
+MAX_CROP_SIZE = 512
 
 # Mask overlay alpha (0–1)
 OVERLAY_ALPHA = 0.5

@@ -21,11 +21,13 @@ Usage:
     python process_frames.py --resume --limit 20
     python process_frames.py --mock --limit 3
     python process_frames.py --diagnose          # run failure-mode agent on negatives
+    python process_frames.py --workers 4         # parallel frame workers (default 4)
 """
 
 import argparse
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import cv2
@@ -139,12 +141,14 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool) -> TriageResult:
 
 def process_frame(
     frame_id: str,
-    agents: dict,
+    vlm: VLMClient,
     ann_out_dir: Path,
     results_out_dir: Path,
-    bar: tqdm,
     diagnose: bool,
 ) -> dict:
+    # Build per-frame agents so BBoxAgent._expected_class is thread-local.
+    agents = build_agents(vlm)
+
     ann_path = config.ANNOTATION_SAM_DIR / f"{frame_id}.png"
     cam_path = config.CAMERA_DIR / f"{frame_id}.png"
     lid_path = config.LIDAR_DIR / f"{frame_id}.png"
@@ -157,7 +161,6 @@ def process_frame(
     lidar_img = cv2.imread(str(lid_path)) if lid_path.exists() else np.zeros_like(camera_img)
 
     proposals = extract_proposals(ann_path, frame_id)
-    bar.set_postfix_str(f"{frame_id}  {len(proposals)} masks")
 
     if not proposals:
         write_annotation(frame_id, original_ann, [], [], ann_out_dir)
@@ -184,7 +187,7 @@ def process_frame(
 
     counts = {d: sum(1 for r in triage_results if r.decision == d)
               for d in (TRIAGE_ACCEPT, "refine", TRIAGE_REJECT, TRIAGE_REVIEW)}
-    bar.write(
+    tqdm.write(
         f"  {frame_id}  accept={counts['accept']} refine={counts['refine']} "
         f"reject={counts['reject']} review={counts['human_review']}  "
         f"auto={n_auto}/{len(proposals)}  ({time.time()-t0:.1f}s)"
@@ -206,6 +209,8 @@ def main():
                         help="run the failure-mode agent on rejected/review masks")
     parser.add_argument("--hpc", action="store_true",
                         help="use HPC data paths (totahv@base.hpc.taltech.ee)")
+    parser.add_argument("--workers", type=int, default=4,
+                        help="parallel frame workers (default 4; reduce if GPU OOMs)")
     args = parser.parse_args()
 
     if args.hpc:
@@ -220,8 +225,6 @@ def main():
         check_ollama(args.model)
         from vlm.ollama_client import OllamaClient
         vlm = OllamaClient(model=args.model)
-
-    agents = build_agents(vlm)
 
     frame_ids = load_frames()
     print(f"Frames: {len(frame_ids)} loaded")
@@ -241,12 +244,23 @@ def main():
         print(f"Resume: {len(frame_ids)} remaining ({before - len(frame_ids)} done)")
 
     frame_records = []
-    with tqdm(frame_ids, desc="Frames", unit="frame") as bar:
-        for frame_id in bar:
-            record = process_frame(frame_id, agents, ann_out_dir,
-                                   results_out_dir, bar, args.diagnose)
-            if record:
-                frame_records.append(record)
+    with tqdm(total=len(frame_ids), desc="Frames", unit="frame") as bar:
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(
+                    process_frame, fid, vlm, ann_out_dir, results_out_dir, args.diagnose
+                ): fid
+                for fid in frame_ids
+            }
+            for fut in as_completed(futures):
+                try:
+                    record = fut.result()
+                    if record:
+                        frame_records.append(record)
+                except Exception as e:
+                    tqdm.write(f"  ERROR {futures[fut]}: {e}")
+                finally:
+                    bar.update(1)
 
     write_summary(frame_records, results_out_dir)
     print(f"\nDone. {len(frame_records)} frames processed.")
