@@ -15,7 +15,7 @@ ZOD_DATA_ROOT = Path("/run/media/tom/ml/zod-data/single_frames")
 
 # All pipeline outputs live under one folder
 OUTPUT_ROOT = DATA_ROOT / "vlm"
-ANNOTATION_OUT_DIR = OUTPUT_ROOT / "annotation"      # refined masks (uint8 PNG)
+ANNOTATION_OUT_DIR = OUTPUT_ROOT / "annotation_full"  # triage + discovery masks (uint8 PNG)
 RESULTS_DIR = OUTPUT_ROOT / "results"                # per-frame JSON + summary
 VIS_DIR = OUTPUT_ROOT / "visualization"              # triage overlay images
 
@@ -23,7 +23,7 @@ VIS_DIR = OUTPUT_ROOT / "visualization"              # triage overlay images
 def _set_output_dirs(root: Path) -> None:
     global OUTPUT_ROOT, ANNOTATION_OUT_DIR, RESULTS_DIR, VIS_DIR
     OUTPUT_ROOT = root
-    ANNOTATION_OUT_DIR = root / "annotation"
+    ANNOTATION_OUT_DIR = root / "annotation_full"
     RESULTS_DIR = root / "results"
     VIS_DIR = root / "visualization"
 

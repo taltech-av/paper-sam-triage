@@ -44,7 +44,7 @@ $^{5}$\textit{Department of Computer Science and Engineering, Universitas Mercat
 Dense pixel-level annotations remain a major bottleneck in training multi-modal perception models for autonomous driving. 
 While the Segment Anything Model (SAM) can generate large volumes of pseudo-labels, its masks frequently drift at boundaries, miss small objects, or introduce spurious segments. 
 We propose a multi-agent refinement framework that combines visual–language reasoning with a domain-specific Swin Transformer to validate SAM masks, suppress hallucinations, and recover objects that SAM fails to detect. 
-The system uses class-aware agreement thresholds to handle the low mIoU of small traffic participants and employs a high-confidence bypass to reduce VLM calls when Swin predictions are reliable. 
+The system uses class-aware agreement thresholds to handle the low mIoU of small traffic participants; a high-confidence bypass threshold is defined and its accuracy–efficiency trade-off studied offline through ablation.
 A complementary discovery module identifies regions where Swin predicts objects over SAM background and confirms them with a VLM, enabling automatic recovery of missed instances. 
 The refined and augmented masks are used to supervise a CLFTv2 camera–LiDAR fusion model, allowing us to study how improved pseudo-label quality affects downstream segmentation. 
 This work demonstrates that combining structured multi-agent reasoning with dataset-adapted quality estimation provides a practical path toward scalable annotation refinement without additional manual labeling.
@@ -65,7 +65,7 @@ Modern camera--LiDAR datasets contain millions of frames, yet only a small fract
 Foundation models such as the Segment Anything Model (SAM) \cite{kirillov2023sam} reduce the cost of generating pseudo-labels, but their masks often drift at boundaries, hallucinate objects, or miss small traffic participants, limiting their usefulness without additional validation.
 
 Classical segmentation models \cite{long2015fcn,ronneberger2015unet,zhao2017psp,chen2018deeplab} and multi-modal fusion approaches \cite{valada2019selfsupervised,jaritz2019multimodal} still depend on accurate labels, while semi-automatic pipelines based on geometric priors or thresholding \cite{zou2019confidence,lee2013pseudo,jaritz2020xmuda} struggle with subtle errors and provide limited interpretability. 
-Recent visual–language models (VLMs) \cite{liu2023llava,alayrac2022flamingo,wang2023voyager,zhang2024labelbench} offer richer semantic priors and structured reasoning, suggesting a more flexible alternative to hand-crafted filters.
+Recent visual–language models (VLMs) \cite{liu2023llava,alayrac2022flamingo,wang2023voyager,wu2023llmjudge} offer richer semantic priors and structured reasoning, suggesting a more flexible alternative to hand-crafted filters.
 
 We propose a multi-agent annotation system that combines visual–language reasoning with a domain-specific Swin Transformer \cite{liu2021swin} to validate and refine SAM-generated masks. 
 The system decomposes mask assessment into specialized agents for object verification, quality estimation, error characterization, and correction, complemented by a deterministic LiDAR consistency check. 
@@ -73,14 +73,14 @@ Because destructive decisions amplify false positives in pseudo-labeling pipelin
 Object-scale multimodal crops ensure reliable VLM judgments, especially for small traffic participants.
 
 Beyond filtering erroneous masks, the system introduces a Swin-based discovery module that identifies objects missed by SAM and confirms them with a VLM, enabling recovery of false negatives. 
-The refined and augmented labels supervise a CLFTv2 camera–LiDAR fusion model \cite{gu2024clft}, allowing us to study how improved pseudo-label quality influences downstream segmentation.
+The refined and augmented labels supervise CLFTv2 (in preparation, extending~\cite{gu2024clft}), a camera–LiDAR fusion model, allowing us to study how improved pseudo-label quality influences downstream segmentation.
 
 Our contributions are:
 \begin{itemize}
     \item a risk-aware multi-agent framework for validating SAM masks using structured multimodal metadata,
     \item a domain-specific Swin quality judge with class-aware thresholds for small-object reliability,
     \item a VLM-assisted discovery mechanism for recovering missed objects,
-    \item and an evaluation on ZOD \cite{alibeigi2023zod} and ISEAuto measuring annotation quality and downstream segmentation effects.
+    \item and an evaluation on ZOD \cite{alibeigi2023zod} measuring annotation quality and downstream segmentation effects.
 \end{itemize}
 
 
@@ -103,7 +103,7 @@ These approaches improve efficiency but rely on fixed heuristics that struggle w
 \subsection{Vision–Language Models and Multi-Agent Reasoning}
 
 Recent vision–language models (VLMs) combine image encoders with language-based reasoning, enabling structured interpretation of visual scenes \cite{liu2024llava,ye2023mplug,wang2024qwen2vl}. 
-VLMs have been used to assess label quality, detect inconsistencies, and guide refinement steps \cite{zhang2024labelbench,li2023llmdata}, acting not as segmentation models but as semantic judges over existing predictions.
+VLMs have been used to assess label quality, detect inconsistencies, and guide refinement steps \cite{wu2023llmjudge,li2023llmdata}, acting not as segmentation models but as semantic judges over existing predictions.
 
 Multi-agent LLM frameworks extend this idea by decomposing complex tasks into specialized agents that collaborate through structured messages \cite{du2023improving,wang2023voyager}. 
 Such systems have been applied to planning, tool use, and quality assessment, demonstrating improved transparency and robustness over monolithic decision modules. 
@@ -114,7 +114,7 @@ However, their use in autonomous-driving annotation remains limited, and prior w
 \begin{figure}[t]
     \centering
     \input{diagrams/pipeline_end_to_end.tex}
-    \caption{Pipeline overview. \textbf{Left (triage):} Swin Quality Agent runs once per frame and scores each SAM mask by its per-pixel agreement ratio~$\alpha$. When $\alpha \geq \tau_s$ (dashed bypass), the BBox VLM call is skipped. All decisions converge in a deterministic triage rule. \textbf{Right (discovery):} The same Swin class map identifies uncovered regions where the model predicts a non-background class over SAM-background pixels. Connected components above 20~px are passed to a VLM for confirmation and class disambiguation; confirmed candidates become new masks. The Failure-Mode Agent is diagnostic only and does not affect triage outcomes.}
+    \caption{Pipeline overview. \textbf{Left (triage):} Swin Quality Agent runs once per frame and scores each SAM mask by its per-pixel agreement ratio~$\alpha$. When $\alpha \geq \tau_s$ (dashed bypass), the BBox VLM call could be skipped; in our inference runs all agents are called to collect complete signal data for offline ablation. All decisions converge in a deterministic triage rule. \textbf{Right (discovery):} The same Swin class map identifies uncovered regions where the model predicts a non-background class over SAM-background pixels. Connected components above 20~px are passed to a VLM for confirmation and class disambiguation; confirmed candidates become new masks. The Failure-Mode Agent is diagnostic only and does not affect triage outcomes.}
     \label{fig:pipeline_end_to_end}
 \end{figure}
 
@@ -134,7 +134,7 @@ We therefore upscale each crop to at least 224 pixels and query one mask at a ti
 
 \subsection{Visual–LLM Agents}
 
-The system decomposes mask assessment into four VLM agents and one deterministic geometric check.
+The system decomposes mask assessment into three VLM agents (BBox, Failure‑Mode, and Correction), one Swin‑based quality agent, and one deterministic geometric check.
 
 \paragraph{Bounding‑Box Agent}
 Performs blind forced‑choice classification over a fixed vocabulary of object classes and distractors. 
@@ -147,7 +147,7 @@ Evaluates mask correctness using a Swin Transformer \cite{liu2021swin} trained o
 A single forward pass produces a per‑pixel class map for the entire frame. 
 Each mask receives an agreement ratio $\alpha$, the fraction of pixels matching the expected class. 
 Because Swin achieves high mIoU on large objects but low mIoU on cyclists and pedestrians, we use class‑specific thresholds: $\tau_q^{\text{large}}{=}0.30$, $\tau_q^{\text{small}}{=}0.15$. 
-A high‑confidence bypass uses $\tau_{\text{skip}}^{\text{large}}{=}0.70$ and $\tau_{\text{skip}}^{\text{small}}{=}0.40$ to skip the BBox agent when Swin is sufficiently confident.
+A bypass threshold $\tau_{\text{skip}}$ ($0.70$ for large classes, $0.40$ for small) is recorded per mask during inference; whether $\alpha \geq \tau_{\text{skip}}$ is stored in the result JSON so that the accuracy–efficiency trade-off of skipping the BBox agent can be evaluated entirely offline from saved outputs.
 
 \paragraph{Failure‑Mode Agent}
 Classifies the dominant error type (\texttt{boundary\_drift}, \texttt{hallucination}, \texttt{occlusion\_miss}, \texttt{fragmentation}). 
@@ -337,26 +337,26 @@ Llama-3.2-Vision-90B    & -- & -- & -- & -- & -- \\
 
 \subsection{Downstream Segmentation}
 
-We train CLFTv2 \cite{gu2024clft} under four label configurations (A–D) plus ablations. 
-Rejected pixels are mapped to \texttt{ignore} unless otherwise specified. 
+We train CLFTv2 (in preparation, extending~\cite{gu2024clft}) under the configurations in Table~\ref{tab:downstream}.
+Rejected pixels are mapped to \texttt{ignore} unless otherwise specified.
 Table~\ref{tab:downstream} reports IoU for each class and mIoU.
 
 \begin{table*}[t]
 \centering
 \caption{Downstream CLFTv2 segmentation performance (placeholders).}
 \label{tab:downstream}
-\begin{tabular}{lllccccc}
+\begin{tabular}{llccccc}
 \toprule
- & \textbf{VLM} & \textbf{Training labels} & \textbf{Veh.} & \textbf{Sign} & \textbf{Cyc.} & \textbf{Ped.} & \textbf{mIoU} \\
+\textbf{Training data} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Cyc.} & \textbf{Ped.} & \textbf{mIoU} \\
 \midrule
-A   & --         & clean only                         & -- & -- & -- & -- & -- \\
-B   & --         & clean + flagged (raw SAM)          & -- & -- & -- & -- & -- \\
-C   & Qwen-72B   & flagged only, triage-filtered       & -- & -- & -- & -- & -- \\
-C   & Llama-90B  & flagged only, triage-filtered       & -- & -- & -- & -- & -- \\
-D   & Qwen-72B   & clean + flagged, triage-filtered    & -- & -- & -- & -- & -- \\
-D   & Llama-90B  & clean + flagged, triage-filtered    & -- & -- & -- & -- & -- \\
-D*  & Qwen-72B   & as D + discovery                    & -- & -- & -- & -- & -- \\
-C$_{bg}$ & Qwen-72B & as C, rejects $\to$ background    & -- & -- & -- & -- & -- \\
+Clean only                               & --        & -- & -- & -- & -- & -- \\
+Clean + flagged, raw SAM                 & --        & -- & -- & -- & -- & -- \\
+Flagged only, triage                     & Qwen-72B  & -- & -- & -- & -- & -- \\
+Flagged only, triage                     & Llama-90B & -- & -- & -- & -- & -- \\
+Clean + flagged, triage                  & Qwen-72B  & -- & -- & -- & -- & -- \\
+Clean + flagged, triage                  & Llama-90B & -- & -- & -- & -- & -- \\
+Clean + flagged, triage + disc.          & Qwen-72B  & -- & -- & -- & -- & -- \\
+Flagged only, triage (rej.\,$\to$\,bg)  & Qwen-72B  & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -370,21 +370,25 @@ All triage-rule variants are generated offline using stored agent outputs; VLM b
 \centering
 \caption{Ablation study (placeholders).}
 \label{tab:ablation}
-\begin{tabular}{lccccc}
+\begin{tabular}{llccccc}
 \toprule
-\textbf{Variant} & \textbf{Veh.} & \textbf{Sign} & \textbf{Cyc.} & \textbf{Ped.} & \textbf{mIoU} \\
+\textbf{Variant} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Cyc.} & \textbf{Ped.} & \textbf{mIoU} \\
 \midrule
-Full system (ours)                                    & -- & -- & -- & -- & -- \\
-Swin only (no VLM)                                    & -- & -- & -- & -- & -- \\
-VLM only (no Swin)                                    & -- & -- & -- & -- & -- \\
-With Swin bypass                                       & -- & -- & -- & -- & -- \\
-Disjunctive rejection                                  & -- & -- & -- & -- & -- \\
-Uniform $\tau_q$                                       & -- & -- & -- & -- & -- \\
-Qwen2.5-VL-72B                                         & -- & -- & -- & -- & -- \\
-Llama-3.2-Vision-90B                                   & -- & -- & -- & -- & -- \\
-With discovery                                         & -- & -- & -- & -- & -- \\
-No discovery                                           & -- & -- & -- & -- & -- \\
-Raw SAM                                                & -- & -- & -- & -- & -- \\
+\multicolumn{2}{l}{\textit{Triage signal ablations (all frames, Qwen-72B)}} \\
+Raw SAM (no triage)                    & --        & -- & -- & -- & -- & -- \\
+Swin only                              & --        & -- & -- & -- & -- & -- \\
+VLM only                               & Qwen-72B  & -- & -- & -- & -- & -- \\
+Triage (Swin + VLM, no disc.)          & Qwen-72B  & -- & -- & -- & -- & -- \\
+Triage + discovery (ours)              & Qwen-72B  & -- & -- & -- & -- & -- \\
+\addlinespace
+\multicolumn{2}{l}{\textit{Triage rule ablations (offline replay)}} \\
+Disjunctive rejection                  & Qwen-72B  & -- & -- & -- & -- & -- \\
+Uniform $\tau_q$                       & Qwen-72B  & -- & -- & -- & -- & -- \\
+With Swin bypass                       & Qwen-72B  & -- & -- & -- & -- & -- \\
+\addlinespace
+\multicolumn{2}{l}{\textit{VLM backbone (all frames, triage + disc.)}} \\
+                                       & Qwen-72B  & -- & -- & -- & -- & -- \\
+                                       & Llama-90B & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -415,7 +419,7 @@ Beyond filtering erroneous masks, the Swin-based discovery module recovers objec
 The clean/flagged frame partition from our earlier annotation campaign provides large-scale weak supervision and supports downstream experiments in which filtered versions of discarded frames are returned to the training pool.
 
 The architecture is backend-agnostic and supports local deployment, making it suitable for privacy-sensitive workflows. 
-Future work includes large-scale empirical evaluation, adaptive prompting, multi-agent debate mechanisms, and extensions to panoptic and temporal segmentation. 
+Future work includes evaluation on a second automotive dataset (ISEAuto) to test generalization across sensor configurations, adaptive prompting, multi-agent debate mechanisms, and extensions to panoptic and temporal segmentation. 
 Overall, the framework offers a reproducible foundation for scalable annotation quality control in autonomous-driving datasets.
 
 

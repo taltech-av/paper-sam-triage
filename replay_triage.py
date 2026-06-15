@@ -6,19 +6,21 @@ Reads vlm/results/frame_*.json (raw agent outputs + scores saved during the
 pipeline run), applies a triage variant, then writes refined annotation PNGs
 to a named output folder — no GPU or Ollama required.
 
-Each variant is a separate training dataset for ablation experiments.
-The pipeline always calls all agents (no bypass), so every JSON contains the
-full set of signals needed to simulate any combination offline.
+Each variant is a separate training dataset for CLFTv2 ablations:
 
-    full         All signals: Swin quality + BBox VLM + consistency
+    raw_sam      No triage — original SAM annotation unchanged (baseline B)
     swin_only    Swin agreement threshold only — no VLM signals
-    vlm_only     BBox VLM + consistency only — Swin quality ignored
-    with_bypass  Simulate old bypass: if swin_bypass=True in JSON, skip VLM
-                 and treat mask as valid+good (shows efficiency/accuracy trade-off)
+    vlm_only     BBox VLM + consistency — Swin quality ignored
+    triage       Swin + VLM + consistency, no discovery (paper config D)
+    with_bypass  Simulate bypass: skip VLM for masks where swin_bypass=True
+
+For the full system (triage + discovery), use annotation_full/ written by
+process_frames.py — it holds the exact connected-component discovery masks.
 
 Usage:
+    python replay_triage.py --variant raw_sam
     python replay_triage.py --variant swin_only
-    python replay_triage.py --variant full --out-suffix _v2
+    python replay_triage.py --variant triage --out-suffix _v2
     python replay_triage.py --variant swin_only --swin-threshold 0.25
     python replay_triage.py --list-variants
 """
@@ -36,6 +38,11 @@ from core.triage import TRIAGE_REJECT, triage
 
 
 # ── Triage variants ───────────────────────────────────────────────────────────
+
+def _triage_raw_sam(mask: dict, **_) -> str:
+    """Accept all masks — original SAM annotation unchanged. Baseline for downstream training."""
+    return "accept"
+
 
 def _triage_full(mask: dict, swin_q: float, **_) -> str:
     """Current pipeline: Swin quality + BBox VLM + consistency, all signals always collected."""
@@ -78,9 +85,10 @@ def _triage_with_bypass(mask: dict, swin_q: float, **_) -> str:
 
 
 VARIANTS = {
-    "full":         (_triage_full,         "All signals: Swin quality + BBox VLM + consistency"),
+    "raw_sam":      (_triage_raw_sam,      "No triage — original SAM annotation unchanged (baseline)"),
     "swin_only":    (_triage_swin_only,    "Swin agreement threshold only — no VLM"),
     "vlm_only":     (_triage_vlm_only,     "BBox VLM + consistency — Swin quality ignored"),
+    "triage":       (_triage_full,         "Swin + VLM + consistency triage, no discovery (paper config D)"),
     "with_bypass":  (_triage_with_bypass,  "Simulate bypass: skip VLM for masks where swin_bypass=True"),
 }
 

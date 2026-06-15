@@ -383,7 +383,7 @@ def main():
 
     write_summary(frame_records, results_out_dir)
     print(f"\nDone. {len(frame_records)} frames processed.")
-    print(f"  Annotations    → {ann_out_dir}")
+    print(f"  Annotations    → {ann_out_dir}  (full system: triage + discovery)")
     print(f"  Results        → {results_out_dir}")
     print(f"  Visualizations → {config.VIS_DIR}")
 
