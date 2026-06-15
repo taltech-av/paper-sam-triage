@@ -20,12 +20,27 @@ RESULTS_DIR = OUTPUT_ROOT / "results"                # per-frame JSON + summary
 VIS_DIR = OUTPUT_ROOT / "visualization"              # triage overlay images
 
 
+def _set_output_dirs(root: Path) -> None:
+    global OUTPUT_ROOT, ANNOTATION_OUT_DIR, RESULTS_DIR, VIS_DIR
+    OUTPUT_ROOT = root
+    ANNOTATION_OUT_DIR = root / "annotation"
+    RESULTS_DIR = root / "results"
+    VIS_DIR = root / "visualization"
+
+
+def set_run_tag(tag: str) -> None:
+    """Namespace all outputs under vlm/<tag>/ so multiple runs never collide."""
+    _set_output_dirs(DATA_ROOT / "vlm" / tag)
+
+
 def use_hpc():
     """Switch all data paths to HPC. Call before any I/O."""
     global DATA_ROOT, CAMERA_DIR, LIDAR_DIR, ANNOTATION_SAM_DIR
-    global ZOD_DATA_ROOT, OUTPUT_ROOT, ANNOTATION_OUT_DIR, RESULTS_DIR, VIS_DIR
-    global FUSION_DIR, SWIN_CFG_PATH, SWIN_CKPT_PATH, WORKERS
-    WORKERS = 4
+    global ZOD_DATA_ROOT, FUSION_DIR, SWIN_CFG_PATH, SWIN_CKPT_PATH, WORKERS
+    global DISCOVERY_MAX_CANDIDATES, VLM_TIMEOUT
+    WORKERS = 8
+    DISCOVERY_MAX_CANDIDATES = 20   # HPC GPU responds faster, can handle more per frame
+    VLM_TIMEOUT = 120               # larger models (72B/90B) need more time per call
     DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
     FUSION_DIR = Path("/gpfs/mariana/smbhome/totahv/fusion-training")
     _swin_model_dir = Path("/gpfs/mariana/smbhome/totahv/models/swin")
@@ -35,10 +50,7 @@ def use_hpc():
     LIDAR_DIR = DATA_ROOT / "lidar_png"
     ANNOTATION_SAM_DIR = DATA_ROOT / "annotation_sam"
     ZOD_DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod-data/single_frames")
-    OUTPUT_ROOT = DATA_ROOT / "vlm"
-    ANNOTATION_OUT_DIR = OUTPUT_ROOT / "annotation"
-    RESULTS_DIR = OUTPUT_ROOT / "results"
-    VIS_DIR = OUTPUT_ROOT / "visualization"
+    _set_output_dirs(DATA_ROOT / "vlm")
 
 # --- Class definitions ---
 CLASS_ID_TO_NAME = {
@@ -81,30 +93,56 @@ CLASS_COLORS_BGR = {
 # --- VLM backend ---
 OLLAMA_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen2.5vl:7b"
-VLM_TIMEOUT = 60          # seconds per call
+VLM_TIMEOUT = 90          # seconds per call (local 7B; use_hpc() raises to 120 for 72B/90B)
 VLM_MAX_RETRIES = 1
 
 # --- Parallelism ---
-WORKERS = 4
+# Local: 1 worker keeps Ollama calls sequential — no queue build-up, no timeouts.
+# HPC: use_hpc() raises this to 4; the dedicated A100 can handle concurrent calls.
+WORKERS = 8
 
 # --- Object discovery (Swin-detected regions absent from annotation_sam) ---
 # Minimum connected-component size in 384×384 Swin space to be considered a candidate.
 # Corresponds to ~80 px in the 768px camera image.
 DISCOVERY_MIN_PIXELS = 20
-# Maximum VLM confirmation calls per frame — largest candidates are evaluated first.
-# Caps Ollama load when many uncovered regions exist.
-DISCOVERY_MAX_CANDIDATES = 5
+# Max VLM confirmation calls per frame (largest candidates first).
+# 4 workers × 10 candidates = 40 max concurrent Ollama calls — within safe limits.
+# On HPC with faster GPUs this can be raised; 10 is a conservative default.
+DISCOVERY_MAX_CANDIDATES = 10
 
 # --- Swin quality agent ---
 FUSION_DIR = Path("/run/media/tom/ml/projects/fusion-training")
 SWIN_CFG_PATH  = FUSION_DIR / "config/zod/swin/config_9.json"
 SWIN_CKPT_PATH = FUSION_DIR / "logs/zod/swin/config_9/best.pth"
-SWIN_AGREEMENT_THRESHOLD = 0.30   # fraction of mask pixels Swin must predict as
-                                   # the expected class to call quality "good"
 SWIN_DEVICE = "cuda:0"
-# If Swin agreement exceeds this, skip bbox VLM call and auto-accept.
-# Set to 1.0 to disable (always call bbox).
-SWIN_SKIP_BBOX_THRESHOLD = 0.70
+
+# Default thresholds (used when no per-class override exists)
+SWIN_AGREEMENT_THRESHOLD  = 0.30  # α ≥ threshold → quality "good"
+SWIN_SKIP_BBOX_THRESHOLD  = 0.70  # α ≥ threshold → skip BBox VLM entirely
+
+# Per-class overrides — cyclist/pedestrian get lower thresholds because
+# Swin achieves only ~35% mIoU on small objects vs ~70%+ on vehicles/signs.
+# Using the same threshold as large objects causes excessive false rejections.
+SWIN_AGREEMENT_THRESHOLD_BY_CLASS = {
+    2: 0.30,  # vehicle      — Swin reliable (~70% mIoU)
+    3: 0.30,  # sign         — Swin reliable
+    4: 0.15,  # cyclist      — Swin ~35% mIoU on small objects
+    5: 0.15,  # pedestrian   — Swin ~35% mIoU on small objects
+}
+SWIN_SKIP_BBOX_THRESHOLD_BY_CLASS = {
+    2: 0.70,  # vehicle
+    3: 0.70,  # sign
+    4: 0.40,  # cyclist      — rarely achieves 0.70 even on valid masks
+    5: 0.40,  # pedestrian
+}
+
+
+def swin_quality_threshold(class_id: int) -> float:
+    return SWIN_AGREEMENT_THRESHOLD_BY_CLASS.get(class_id, SWIN_AGREEMENT_THRESHOLD)
+
+
+def swin_skip_threshold(class_id: int) -> float:
+    return SWIN_SKIP_BBOX_THRESHOLD_BY_CLASS.get(class_id, SWIN_SKIP_BBOX_THRESHOLD)
 
 # --- Metadata pre-filter (skip VLM entirely) ---
 # Only skip VLM for cases where the answer is unambiguous from geometry alone.

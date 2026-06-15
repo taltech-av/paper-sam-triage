@@ -115,34 +115,22 @@ def metadata_verdict(proposal: MaskProposal, bundle: Bundle) -> str | None:
 
 def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
                 swin_score: float | None = None) -> TriageResult:
-    """Run the agent cascade on one mask and combine via the triage rules."""
+    """Run the full agent cascade on one mask and combine via the triage rules.
+
+    The Swin bypass threshold is recorded in swin_bypass for offline ablation
+    analysis but does NOT skip any agent call — all signals are always collected.
+    """
     consistency_out = agents["consistency"].run(bundle)
 
-    # High Swin confidence: skip bbox VLM call entirely and treat as valid.
+    # Record whether Swin bypass WOULD have fired (for ablation analysis in replay_triage.py).
     from agents.swin_quality_agent import SwingQualityAgent
-    quality_agent = agents["quality"]
-    if isinstance(quality_agent, SwingQualityAgent):
-        if swin_score is not None and swin_score >= config.SWIN_SKIP_BBOX_THRESHOLD:
-            bbox_out = "valid"
-            quality_out = "good"
-            correction_out = None
-            if consistency_out == "fail":
-                correction_out = agents["correction"].run(bundle)
-            result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
-            result.swin_score = swin_score
-            result.swin_bypass = True
-            if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
-                result.failure_mode_out = agents["failure_mode"].run(bundle)
-            return result
+    swin_bypass = False
+    if isinstance(agents["quality"], SwingQualityAgent) and swin_score is not None:
+        cls_id = bundle.metadata.get("class_id")
+        swin_bypass = swin_score >= config.swin_skip_threshold(cls_id)
 
     bbox_out = agents["bbox"].run(bundle)
-
-    # Early exit: rejection already decided — skip the quality call.
-    # "background" = the VLM positively identified a non-object surface.
-    if bbox_out == "background" or (bbox_out == "invalid" and consistency_out == "fail"):
-        quality_out = None
-    else:
-        quality_out = agents["quality"].run(bundle)
+    quality_out = agents["quality"].run(bundle)
 
     correction_out = None
     if bbox_out == "valid" and quality_out == "good" and consistency_out == "fail":
@@ -150,8 +138,8 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
 
     result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
     result.swin_score = swin_score
+    result.swin_bypass = swin_bypass
 
-    # Failure-mode diagnosis for non-accepted masks (analysis only)
     if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
         result.failure_mode_out = agents["failure_mode"].run(bundle)
 
@@ -253,6 +241,9 @@ def process_frame(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=config.OLLAMA_MODEL)
+    parser.add_argument("--tag", default=None,
+                        help="output namespace under vlm/<tag>/ (default: sanitized model name). "
+                             "Use this to keep two HPC runs separate, e.g. --tag qwen72b vs --tag llama90b")
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
@@ -272,6 +263,11 @@ def main():
 
     if args.hpc:
         config.use_hpc()
+
+    # Namespace outputs by model name so two HPC runs never overwrite each other.
+    tag = args.tag or args.model.replace(":", "_").replace("/", "_")
+    config.set_run_tag(tag)
+    print(f"Output tag: {tag}  →  {config.OUTPUT_ROOT}")
 
     if args.frames:
         config.FRAMES_FILE = args.frames

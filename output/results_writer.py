@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import config
 from core.mask_extractor import MaskProposal
 from core.triage import TriageResult
 
@@ -34,6 +35,8 @@ def write_frame_result(
                 "swin_agreement": round(result.swin_score, 4) if result.swin_score is not None else None,
                 "lidar_support": round(result.lidar_support, 4) if result.lidar_support is not None else None,
                 "swin_bypass": result.swin_bypass,
+                "swin_q_threshold": config.swin_quality_threshold(proposal.class_id),
+                "swin_skip_threshold": config.swin_skip_threshold(proposal.class_id),
             },
             "triage": result.decision,
             "metadata": {k: v for k, v in proposal.metadata.items()

@@ -6,12 +6,15 @@ Reads vlm/results/frame_*.json (raw agent outputs + scores saved during the
 pipeline run), applies a triage variant, then writes refined annotation PNGs
 to a named output folder — no GPU or Ollama required.
 
-Each variant is a separate training dataset for ablation experiments:
+Each variant is a separate training dataset for ablation experiments.
+The pipeline always calls all agents (no bypass), so every JSON contains the
+full set of signals needed to simulate any combination offline.
 
-    full        Current concordance rules  (bbox + Swin quality + consistency)
-    swin_only   Swin agreement threshold only  (no VLM at all)
-    vlm_only    bbox + consistency only  (as if Swin never ran)
-    no_bypass   Full rules but τ_skip=1.0  (always calls bbox VLM, no fast path)
+    full         All signals: Swin quality + BBox VLM + consistency
+    swin_only    Swin agreement threshold only — no VLM signals
+    vlm_only     BBox VLM + consistency only — Swin quality ignored
+    with_bypass  Simulate old bypass: if swin_bypass=True in JSON, skip VLM
+                 and treat mask as valid+good (shows efficiency/accuracy trade-off)
 
 Usage:
     python replay_triage.py --variant swin_only
@@ -34,20 +37,13 @@ from core.triage import TRIAGE_REJECT, triage
 
 # ── Triage variants ───────────────────────────────────────────────────────────
 
-def _triage_full(mask: dict, swin_q: float, swin_skip: float) -> str:
-    """Current pipeline rules, replayed from stored agent outputs + scores."""
+def _triage_full(mask: dict, swin_q: float, **_) -> str:
+    """Current pipeline: Swin quality + BBox VLM + consistency, all signals always collected."""
     ag = mask["agents"]
     scores = mask.get("scores", {})
     swin = scores.get("swin_agreement")
-
-    if swin is not None and swin >= swin_skip:
-        bbox_out = "valid"
-        quality_out = "good"
-    else:
-        bbox_out = ag.get("bbox")
-        quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
-
-    return triage(bbox_out, quality_out, None, ag.get("correction"), ag.get("consistency")).decision
+    quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
+    return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
 
 
 def _triage_swin_only(mask: dict, swin_q: float, **_) -> str:
@@ -59,25 +55,33 @@ def _triage_swin_only(mask: dict, swin_q: float, **_) -> str:
 
 
 def _triage_vlm_only(mask: dict, **_) -> str:
-    """bbox + consistency only — as if Swin quality agent never ran."""
+    """BBox VLM + consistency only — Swin quality signal ignored."""
     ag = mask["agents"]
     return triage(ag.get("bbox"), None, None, ag.get("correction"), ag.get("consistency")).decision
 
 
-def _triage_no_bypass(mask: dict, swin_q: float, **_) -> str:
-    """Full concordance rules but τ_skip=1.0 — Swin scores quality, bbox always called."""
+def _triage_with_bypass(mask: dict, swin_q: float, **_) -> str:
+    """Simulate old bypass: masks where swin_bypass=True skip BBox VLM (treat as valid+good).
+    Useful for measuring the accuracy vs. efficiency trade-off of the bypass optimization."""
     ag = mask["agents"]
     scores = mask.get("scores", {})
     swin = scores.get("swin_agreement")
-    quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
-    return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
+
+    if scores.get("swin_bypass", False):
+        bbox_out = "valid"
+        quality_out = "good"
+    else:
+        bbox_out = ag.get("bbox")
+        quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
+
+    return triage(bbox_out, quality_out, None, ag.get("correction"), ag.get("consistency")).decision
 
 
 VARIANTS = {
-    "full":       (_triage_full,      "Current pipeline: Swin quality + BBox VLM + consistency"),
-    "swin_only":  (_triage_swin_only, "Swin agreement threshold only — no VLM"),
-    "vlm_only":   (_triage_vlm_only,  "BBox VLM + consistency — no Swin quality"),
-    "no_bypass":  (_triage_no_bypass, "Full rules with τ_skip=1.0 (Swin quality, bypass disabled)"),
+    "full":         (_triage_full,         "All signals: Swin quality + BBox VLM + consistency"),
+    "swin_only":    (_triage_swin_only,    "Swin agreement threshold only — no VLM"),
+    "vlm_only":     (_triage_vlm_only,     "BBox VLM + consistency — Swin quality ignored"),
+    "with_bypass":  (_triage_with_bypass,  "Simulate bypass: skip VLM for masks where swin_bypass=True"),
 }
 
 
@@ -106,6 +110,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--variant", default="all", choices=list(VARIANTS) + ["all"],
                         help="Triage variant to apply, or 'all' to generate every variant (default: all)")
+    parser.add_argument("--tag", default=None,
+                        help="run tag to read results from (vlm/<tag>/results/). "
+                             "Must match the --tag used during process_frames.py.")
     parser.add_argument("--out-suffix", default="",
                         help="Suffix appended to the output folder name, e.g. '_v2'")
     parser.add_argument("--swin-threshold", type=float, default=config.SWIN_AGREEMENT_THRESHOLD,
@@ -123,6 +130,9 @@ def main():
 
     if args.hpc:
         config.use_hpc()
+
+    if args.tag:
+        config.set_run_tag(args.tag)
 
     result_files = sorted(config.RESULTS_DIR.glob("frame_*.json"))
     if not result_files:

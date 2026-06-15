@@ -3,29 +3,28 @@
   node distance=3.5mm,
   every node/.style={font=\small},
   block/.style={draw, rounded corners, align=center,
-                minimum width=30mm, minimum height=7mm, fill=blue!10},
-  stage/.style={draw, rounded corners, align=center,
-                minimum width=30mm, minimum height=7mm, fill=green!12},
+                minimum width=28mm, minimum height=6.5mm, fill=blue!10},
   agent/.style={draw, rounded corners, align=center,
-                minimum width=30mm, minimum height=7mm, fill=purple!12},
-  swinagent/.style={draw, rounded corners, align=center,
-                    minimum width=30mm, minimum height=7mm, fill=orange!18},
+                minimum width=28mm, minimum height=6.5mm, fill=purple!12},
+  swinnode/.style={draw, rounded corners, align=center,
+                   minimum width=28mm, minimum height=6.5mm, fill=orange!18},
+  discnode/.style={draw, rounded corners, align=center,
+                   minimum width=28mm, minimum height=6.5mm, fill=teal!12},
   decision/.style={draw, rounded corners, align=center,
-                   minimum width=34mm, minimum height=8mm, fill=yellow!18},
+                   minimum width=28mm, minimum height=7mm, fill=yellow!18},
+  output/.style={draw, rounded corners, align=center,
+                 minimum width=28mm, minimum height=7mm, fill=green!20},
   bypass/.style={dashed, gray, ->},
 ]
 
-%% ── Main vertical chain ──────────────────────────────────────────────────────
+%% ── LEFT: Triage pipeline ─────────────────────────────────────────────────────
 \node[block] (input)
   {Input Frame\\[-1pt]{\scriptsize Camera + LiDAR + SAM Masks}};
 
-\node[stage, below=of input] (bundle)
-  {Multimodal Bundle\\[-1pt]{\scriptsize RGB Crop + Overlay + Depth Map}};
+\node[swinnode, below=6mm of input] (swin)
+  {Swin Quality Agent\\[-1pt]{\scriptsize one forward pass / frame}};
 
-\node[swinagent, below=of bundle] (swin)
-  {Swin Quality Agent\\[-1pt]{\scriptsize one forward pass per frame}};
-
-\node[agent, below=7mm of swin] (bbox)
+\node[agent, below=8mm of swin] (bbox)
   {BBox Agent (VLM)\\[-1pt]{\scriptsize valid / invalid / background}};
 
 \node[agent, below=of bbox] (consist)
@@ -37,25 +36,50 @@
 \node[decision, below=of correct] (triage)
   {Triage Decision\\[-1pt]{\scriptsize accept / refine / reject / review}};
 
-%% ── Failure-mode agent (diagnostic, bottom-right) ────────────────────────────
-\node[agent, below right=4mm and 2mm of triage, anchor=north west,
-      minimum width=26mm, fill=purple!8] (fma)
-  {Failure-Mode Agent\\[-1pt]{\scriptsize diagnostic only}};
+%% ── RIGHT: Discovery pipeline ────────────────────────────────────────────────
+\node[discnode, right=12mm of swin] (uncov)
+  {Uncovered Regions\\[-1pt]{\scriptsize Swin class $\cap$ SAM background}};
 
-%% ── Main flow arrows ─────────────────────────────────────────────────────────
-\draw[->] (input)   -- (bundle);
-\draw[->] (bundle)  -- (swin);
+\node[discnode, below=of uncov] (cc)
+  {Connected Components\\[-1pt]{\scriptsize $\geq 20$\,px, top-5 by area}};
+
+\node[agent, below=of cc] (disc_vlm)
+  {VLM Confirmation\\[-1pt]{\scriptsize cyclist / pedestrian / other}};
+
+\node[discnode, below=of disc_vlm] (confirmed)
+  {Confirmed Discoveries};
+
+%% ── Failure-mode agent (diagnostic) ─────────────────────────────────────────
+\node[agent, below right=4mm and 1mm of triage, anchor=north west,
+      minimum width=22mm, fill=purple!8, font=\scriptsize] (fma)
+  {Failure-Mode Agent\\{\tiny diagnostic only}};
+
+%% ── Output ───────────────────────────────────────────────────────────────────
+\node[output, below=10mm of triage] (out)
+  {Refined Annotation\\[-1pt]{\scriptsize triage results + confirmed discoveries}};
+
+%% ── Main flow ────────────────────────────────────────────────────────────────
+\draw[->] (input)   -- (swin);
 \draw[->] (swin)    -- node[right, font=\scriptsize]{$\alpha < \tau_s$} (bbox);
 \draw[->] (bbox)    -- (consist);
 \draw[->] (consist) -- (correct);
 \draw[->] (correct) -- (triage);
-\draw[->] (triage.south) -- ++(0,-3mm) -| (fma.north);
+\draw[->] (triage.south) -- ++(0,-3.5mm) -| (out.north -| triage);
+\draw[->] (triage.south) -- ++(0,-2mm) -| (fma.north);
 
-%% ── Swin high-confidence bypass (left gutter, skips BBox) ───────────────────
+%% ── Swin high-confidence bypass (skips BBox VLM) ────────────────────────────
 \draw[bypass]
   (swin.west)
-  -- node[above, font=\scriptsize]{$\alpha{\geq}\tau_s$} ++(-8mm, 0)
+  -- node[left, font=\scriptsize]{$\alpha{\geq}\tau_s$} ++(-8mm, 0)
   -- ([xshift=-8mm]consist.west)
   -- (consist.west);
+
+%% ── Discovery branch (false-negative recovery) ───────────────────────────────
+\draw[->] (swin.east)
+  -- node[above, font=\scriptsize]{discovery} (uncov.west);
+\draw[->] (uncov)    -- (cc);
+\draw[->] (cc)       -- (disc_vlm);
+\draw[->] (disc_vlm) -- (confirmed);
+\draw[->] (confirmed.south) -- ++(0,-4mm) -| (out.east);
 
 \end{tikzpicture}

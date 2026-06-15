@@ -149,4 +149,6 @@ class SwingQualityAgent:
         score = self.agreement(bundle)
         if score is None:
             return self.SAFE_DEFAULT
-        return "good" if score >= self.threshold else "bad"
+        cls_id = bundle.metadata.get("class_id")
+        threshold = config.swin_quality_threshold(cls_id) if cls_id is not None else self.threshold
+        return "good" if score >= threshold else "bad"
