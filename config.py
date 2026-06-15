@@ -38,7 +38,7 @@ def use_hpc():
     global DATA_ROOT, CAMERA_DIR, LIDAR_DIR, ANNOTATION_SAM_DIR
     global ZOD_DATA_ROOT, FUSION_DIR, SWIN_CFG_PATH, SWIN_CKPT_PATH, WORKERS
     global DISCOVERY_MAX_CANDIDATES, VLM_TIMEOUT
-    WORKERS = 8
+    WORKERS = 16
     DISCOVERY_MAX_CANDIDATES = 20   # HPC GPU responds faster, can handle more per frame
     VLM_TIMEOUT = 120               # larger models (72B/90B) need more time per call
     DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
@@ -98,7 +98,7 @@ VLM_MAX_RETRIES = 1
 
 # --- Parallelism ---
 # Local: 1 worker keeps Ollama calls sequential — no queue build-up, no timeouts.
-# HPC: use_hpc() raises this to 4; the dedicated A100 can handle concurrent calls.
+# HPC: use_hpc() raises this to 16; the dedicated A100 can handle concurrent calls.
 WORKERS = 8
 
 # --- Object discovery (Swin-detected regions absent from annotation_sam) ---
