@@ -19,6 +19,8 @@ class Bundle:
     overlay_crop: Image.Image    # same crop with mask rendered on top
     depth_crop: Image.Image      # same crop from lidar_png (768px, resized to match)
     metadata: dict               # structured text fields for the VLM prompt
+    pixel_mask: Optional[np.ndarray] = None  # full-frame boolean mask (768px space)
+    swin_pred: Optional[np.ndarray] = None   # 384×384 Swin class prediction map
 
 
 def build_bundle(
@@ -106,6 +108,7 @@ def build_bundle(
         overlay_crop=_bgr_to_pil(overlay_bgr),
         depth_crop=_bgr_to_pil(lidar_crop_bgr),
         metadata=metadata,
+        pixel_mask=proposal.pixel_mask,
     )
 
 

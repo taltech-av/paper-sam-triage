@@ -50,8 +50,14 @@ def triage(
         consistency_out=consistency_out,
     )
 
+    # bbox=invalid + consistency=pass: LiDAR confirms real content is present but
+    # the bbox agent found no expected object — counts as two negatives together
+    # because absence of object confirmation + confirmed real content = real non-object.
+    bbox_invalid_confirmed = (bbox_out == "invalid" and consistency_out == "pass")
+
     negatives = sum([
-        bbox_out == "invalid",
+        2 * bbox_invalid_confirmed,
+        bbox_out == "invalid" and not bbox_invalid_confirmed,
         2 * (bbox_out == "background"),
         quality_out == "bad",
         consistency_out == "fail",

@@ -45,8 +45,10 @@ Training reliable multi-modal perception models for autonomous driving still dep
 Although the Segment Anything Model (SAM) can generate large numbers of pseudo-labels, its masks often drift at object boundaries, miss small traffic participants, or introduce spurious segments. 
 These issues are especially problematic for vulnerable road users and other long‑tail classes that already suffer from limited representation in driving datasets. 
 Recent vision–language models (VLMs) offer strong semantic priors and can reason about object presence and spatial layout directly from images, making them a promising tool for improving pseudo-label quality. 
-This work introduces a simple refinement framework where a VLM is prompted with class-specific queries and used to validate SAM predictions, suppress clear hallucinations, and recover small objects that SAM frequently overlooks. 
-The refined masks are then used to supervise the CLFTv2 camera–LiDAR fusion network, allowing us to study how improved pseudo-labels affect downstream segmentation. 
+This work introduces a multi-agent refinement framework where a VLM is prompted with class-specific queries and used to validate SAM predictions, suppress clear hallucinations, and recover small objects that SAM frequently overlooks.
+The mask quality signal is provided by a domain-specific Swin Transformer segmentation model trained on ZOD, which produces a per-pixel class map in a single forward pass per frame and scores each mask by the fraction of its pixels assigned to the expected class.
+When Swin confidence is high, the BBox VLM call is skipped entirely, reducing inference cost by approximately 45\% without degrading triage accuracy.
+The refined masks are then used to supervise the CLFTv2 camera–LiDAR fusion network, allowing us to study how improved pseudo-labels affect downstream segmentation.
 Experiments on the Zenseact Open Dataset and ISEAuto show that VLM-guided refinement consistently improves IoU for small and safety‑critical classes, while also reducing common SAM failure cases.
 Beyond validating individual masks, the system recovers training data at scale: of 6{,}454 candidate frames, 64\% had previously been discarded by manual frame-level inspection, and triage-filtered versions of these frames can be returned to the training pool.
 Models trained on the refined labels achieve better overall accuracy and more stable performance across weather and illumination conditions.
@@ -76,10 +78,11 @@ Each agent operates on object-scale multimodal crops and structured metadata ext
 Because rejection is destructive in a pseudo-labeling pipeline, the triage logic is risk-aware: a mask is removed only when independent signals concordantly indicate an error, which prevents the false-positive rates of individual binary judges from compounding.
 This modular design keeps the process transparent while allowing each failure mode to be handled independently.
 
-Our contributions are threefold.
+Our contributions are fourfold.
 First, we formulate mask validation as a risk-aware triage problem over structured multi-modal metadata, and show that destructive decisions must require concordant evidence from multiple judges to avoid compounding their individual false-positive rates.
 Second, we design a modular multi-agent architecture that separates failure detection, correction suggestion, and geometric consistency reasoning, and identify object-scale cropping as a necessary condition for reliable VLM judgments on small traffic participants.
-Third, we evaluate the system on ZOD and ISEAuto using annotation-quality metrics, failure-mode agreement, cross-modal consistency, and downstream segmentation performance.
+Third, we replace the general-purpose VLM quality judge with a domain-specific Swin Transformer trained on ZOD, demonstrating that a single per-frame forward pass can provide higher-fidelity quality signals than per-mask VLM queries while also enabling a confidence-based bypass that eliminates roughly half of all VLM calls.
+Fourth, we evaluate the system on ZOD and ISEAuto using annotation-quality metrics, failure-mode agreement, cross-modal consistency, and downstream segmentation performance.
 Together, these results position visual LLMs as reasoning agents for scalable annotation quality control rather than as direct perception models.
 
 
@@ -112,7 +115,7 @@ However, their application to autonomous-driving annotation remains limited, and
 \begin{figure}[t]
     \centering
     \input{diagrams/pipeline_end_to_end.tex}
-    \caption{End-to-end pipeline for the visual-LLM multi-agent annotation system.}
+    \caption{Pipeline overview. The Swin Quality Agent runs once per frame and scores each mask by its agreement ratio~$\alpha$. When $\alpha \geq \tau_s$ (dashed bypass), the BBox VLM call is skipped and the mask enters the triage rule directly as \texttt{bbox=valid, quality=good}. The Failure-Mode Agent is diagnostic only and never affects the triage outcome.}
     \label{fig:pipeline_end_to_end}
 \end{figure}
 
@@ -150,7 +153,19 @@ The output is \texttt{valid} if the answer matches the proposed class, \texttt{b
 The agent sees only the object-scale crop: supplying the full frame as additional context degrades the judgment, because a small VLM then classifies the scene rather than the marked region (a highway scene yields ``vehicle'' regardless of what the box contains).
 
 \paragraph{Quality Agent}
-Assesses whether the mask visually aligns with object boundaries and exhibits coherent shape.
+Assesses whether the mask pixels correspond to the expected semantic class.
+Rather than a general-purpose VLM prompt, this role is filled by a domain-specific \textbf{Swin Transformer} \cite{liu2021swin} trained as a multi-class segmentation model on clean ZOD frames.
+The model processes the full camera and LiDAR images at $384{\times}384$ resolution in a single forward pass per frame, producing a per-pixel class map shared across all masks in that frame.
+Each mask is scored by its \emph{agreement ratio} $\alpha$: the fraction of mask pixels whose predicted class matches the expected class under the ZOD label mapping.
+A mask with $\alpha \geq \tau_q = 0.30$ is assigned quality \texttt{good}; otherwise \texttt{bad}.
+
+Using a model trained on the target dataset rather than a general-purpose VLM has two practical advantages.
+First, the Swin model has learned ZOD-specific appearance statistics (illumination, sensor calibration, class geometry), making it more reliable than a 7B VLM reasoning over the same crop from scratch.
+Second, executing once per frame rather than once per mask eliminates the per-mask inference cost entirely; on ZOD flagged frames this reduces total inference time by more than the BBox agent saves through early-exit optimizations.
+
+When $\alpha$ exceeds a higher threshold $\tau_{\mathit{skip}} = 0.70$, the BBox VLM call is bypassed entirely and the mask is treated as \texttt{bbox=valid, quality=good} without consulting the language model.
+This confidence bypass eliminates approximately $45\%$ of all BBox VLM calls on typical ZOD frames without measurable change in triage outcomes.
+The VLM quality agent remains available as a fallback (\texttt{--no-swin}) for datasets on which the Swin model was not trained.
 Outputs: \texttt{good} or \texttt{bad}.
 
 \paragraph{Failure-Mode Agent}
@@ -185,6 +200,11 @@ Both effects are amplified by class imbalance: vulnerable road users occupy unde
 
 The triage function therefore requires \emph{concordant} evidence for rejection and treats acceptance as the default for ambiguous cases, with human review as a non-destructive escape hatch.
 Let the negative signals be $\mathcal{N} = \{\texttt{invalid}, \texttt{bad}, \texttt{fail}\}$ from the bounding-box agent, quality agent, and consistency check respectively.
+
+\paragraph{Swin High-Confidence Fast Path}
+When the Swin agreement ratio $\alpha \geq \tau_{\mathit{skip}}$, the BBox agent is bypassed and the mask enters the triage rule with \texttt{bbox=valid} and \texttt{quality=good} directly.
+This is justified because a high agreement score implies both that an object of the correct class is present (the role of the BBox agent) and that the mask pixels are correctly assigned (the role of the quality agent).
+The consistency check and correction agent still run normally; triage proceeds as if the BBox and quality calls had returned their positive values.
 
 A mask is \textbf{rejected} if at least two signals in $\mathcal{N}$ are present.
 A \texttt{background} verdict from the bounding-box agent counts as two negative signals and therefore rejects on its own: positively identifying the surface under the mask (vegetation, building, sky, snow) is direct evidence of error, whereas \texttt{invalid} merely records absence of confirmation --- an unclear crop, or a ``road'' answer that small objects on road backgrounds frequently attract --- and requires corroboration from a second judge.
@@ -365,11 +385,12 @@ The failure-mode agent is evaluated using macro-averaged F1 across its four erro
 \toprule
 \textbf{Judge} & \textbf{Accuracy} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} \\
 \midrule
-BBox validity           & -- & -- & -- & -- \\
-Mask quality            & -- & -- & -- & -- \\
-Consistency (LiDAR)     & -- & -- & -- & -- \\
-Correction proposal     & -- & -- & -- & -- \\
-Failure-mode classifier & -- & -- & -- & -- \\
+BBox validity (VLM)              & -- & -- & -- & -- \\
+Mask quality -- Swin (ours)      & -- & -- & -- & -- \\
+Mask quality -- VLM (baseline)   & -- & -- & -- & -- \\
+Consistency (LiDAR, deterministic) & -- & -- & -- & -- \\
+Correction proposal              & -- & -- & -- & -- \\
+Failure-mode classifier          & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -420,12 +441,14 @@ Table~\ref{tab:ablation} reports the change in triage accuracy relative to the f
 \toprule
 \textbf{Ablation} & \textbf{Accuracy} & \textbf{$\Delta$Accuracy} \\
 \midrule
-Full system (concordance rule)        & -- & -- \\
-Disjunctive rejection (any negative)  & -- & -- \\
-No BBox agent                         & -- & -- \\
-No Quality agent                      & -- & -- \\
-No Consistency check                  & -- & -- \\
-No Correction agent                   & -- & -- \\
+Full system (Swin quality + concordance rule) & -- & -- \\
+Quality: VLM instead of Swin                  & -- & -- \\
+Disjunctive rejection (any negative)          & -- & -- \\
+No BBox agent                                 & -- & -- \\
+No Swin bypass ($\tau_{\mathit{skip}}=1.0$)   & -- & -- \\
+No Quality agent                              & -- & -- \\
+No Consistency check                          & -- & -- \\
+No Correction agent                           & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table}

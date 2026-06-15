@@ -7,7 +7,7 @@ from core.bundle import Bundle
 # Forced-choice vocabulary: the four annotation classes plus the surfaces SAM
 # typically leaks onto. Asking "what is this?" makes the model commit to an
 # answer; a yes/no presence question invites agreement and accepts noise blobs.
-CLASSES = ("vehicle", "sign", "cyclist", "pedestrian")
+CLASSES = ("vehicle", "sign", "cyclist", "pedestrian", "traffic_light")
 # Concrete non-object surfaces: answering one of these is positive evidence
 # that the mask covers background, strong enough to reject on its own.
 STRONG_DISTRACTORS = ("vegetation", "building", "sky", "snow")
@@ -36,6 +36,8 @@ class BBoxAgent(BaseAgent):
         return (
             "This is a zoomed crop from an autonomous driving camera.\n"
             f"What does it mainly show? Choose one: {options}\n"
+            "Note: traffic lights and traffic signals count as TRAFFIC_LIGHT.\n"
+            "Note: trees, bushes, shrubs, hedges, or roadside vegetation count as VEGETATION.\n"
             "If the crop is blurry, dark, featureless, or shows no distinct "
             "object, reply UNCLEAR.\n"
             "Reply with exactly one word from the list."
@@ -48,6 +50,9 @@ class BBoxAgent(BaseAgent):
         if not found:
             return None  # unparseable → retry, then SAFE_DEFAULT
         if self._expected_class in found:
+            return "valid"
+        # traffic_light is a valid instance of the "sign" class in ZOD
+        if "traffic_light" in found and self._expected_class == "sign":
             return "valid"
         if found & set(STRONG_DISTRACTORS):
             return "background"

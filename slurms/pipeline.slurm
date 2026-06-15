@@ -17,6 +17,7 @@ export PATH="$HOME/bin:$PATH"
 export OLLAMA_HOST="0.0.0.0:11434"
 export OLLAMA_CONTEXT_LENGTH=4096
 export OLLAMA_MODELS="/gpfs/mariana/smbhome/totahv/ollama_models"
+export OLLAMA_NUM_PARALLEL=2
 export LD_LIBRARY_PATH="$PIPELINE_DIR/cuda/lib64:$LD_LIBRARY_PATH"
 
 mkdir -p "$PIPELINE_DIR/logs"
@@ -44,6 +45,8 @@ echo "[$(date)] Warming up $MODEL..."
 ollama run "$MODEL" <<< "warmup"
 
 # ── Run pipeline ──────────────────────────────────────────────────────────────
+# Quality agent: Swin segmentation model (default). Pass --no-swin to use VLM instead.
+# Workers: 4 (set by --hpc via config.WORKERS).
 echo "[$(date)] Starting pipeline..."
 cd "$PIPELINE_DIR"
 python process_frames.py --model "$MODEL" --resume --hpc

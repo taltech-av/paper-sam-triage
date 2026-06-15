@@ -24,7 +24,13 @@ def use_hpc():
     """Switch all data paths to HPC. Call before any I/O."""
     global DATA_ROOT, CAMERA_DIR, LIDAR_DIR, ANNOTATION_SAM_DIR
     global ZOD_DATA_ROOT, OUTPUT_ROOT, ANNOTATION_OUT_DIR, RESULTS_DIR, VIS_DIR
+    global FUSION_DIR, SWIN_CFG_PATH, SWIN_CKPT_PATH, WORKERS
+    WORKERS = 4
     DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
+    FUSION_DIR = Path("/gpfs/mariana/smbhome/totahv/fusion-training")
+    _swin_model_dir = Path("/gpfs/mariana/smbhome/totahv/models/swin")
+    SWIN_CFG_PATH  = _swin_model_dir / "config_9.json"
+    SWIN_CKPT_PATH = _swin_model_dir / "best.pth"
     CAMERA_DIR = DATA_ROOT / "camera"
     LIDAR_DIR = DATA_ROOT / "lidar_png"
     ANNOTATION_SAM_DIR = DATA_ROOT / "annotation_sam"
@@ -78,12 +84,26 @@ OLLAMA_MODEL = "qwen2.5vl:7b"
 VLM_TIMEOUT = 60          # seconds per call
 VLM_MAX_RETRIES = 1
 
+# --- Parallelism ---
+WORKERS = 4
+
+# --- Swin quality agent ---
+FUSION_DIR = Path("/run/media/tom/ml/projects/fusion-training")
+SWIN_CFG_PATH  = FUSION_DIR / "config/zod/swin/config_9.json"
+SWIN_CKPT_PATH = FUSION_DIR / "logs/zod/swin/config_9/best.pth"
+SWIN_AGREEMENT_THRESHOLD = 0.30   # fraction of mask pixels Swin must predict as
+                                   # the expected class to call quality "good"
+SWIN_DEVICE = "cuda:0"
+# If Swin agreement exceeds this, skip bbox VLM call and auto-accept.
+# Set to 1.0 to disable (always call bbox).
+SWIN_SKIP_BBOX_THRESHOLD = 0.70
+
 # --- Metadata pre-filter (skip VLM entirely) ---
 # Only skip VLM for cases where the answer is unambiguous from geometry alone.
 # Everything else goes to VLM so we can measure its actual contribution.
 # NOTE: there is deliberately no auto-accept for large masks — on flagged frames
 # the largest connected components are often exactly the leaked noise blobs.
-AUTO_REJECT_MAX_ASPECT = 6.0      # clearly leaked: extreme horizontal/vertical bleed
+AUTO_REJECT_MAX_ASPECT = 4.5      # clearly leaked: extreme horizontal/vertical bleed
 AUTO_REJECT_MIN_ASPECT = 0.12     # clearly leaked: extreme horizontal/vertical bleed
 
 # --- Deterministic consistency check ---

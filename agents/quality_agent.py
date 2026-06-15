@@ -4,7 +4,9 @@ from core.bundle import Bundle
 
 class QualityAgent(BaseAgent):
     VALID_OUTPUTS = ("good", "bad")
-    SAFE_DEFAULT = "bad"
+    # Benefit of the doubt: bbox and consistency already catch non-objects.
+    # Quality=bad should only fire on clear blobs, not uncertain small objects.
+    SAFE_DEFAULT = "good"
 
     def build_prompt(self, bundle: Bundle) -> str:
         cls = bundle.metadata["class_name"]
@@ -17,11 +19,11 @@ class QualityAgent(BaseAgent):
             "  2. The same crop with the segmentation mask highlighted\n"
             "  3. LiDAR depth projection of the same region\n\n"
             f"{_meta_text(bundle)}\n\n"
-            f"Mark as GOOD if the highlighted mask covers a recognizable {cls} and "
-            "roughly follows its outline, even if edges are not perfectly tight.\n\n"
-            f"Mark as BAD if no {cls} is recognizable under the mask, or the mask "
-            "mostly covers something else (trees, bushes, grass, snow, buildings, "
-            "road surface, or featureless texture), or it is a shapeless blob that "
-            "follows no object outline.\n\n"
+            f"Mark as GOOD if there is any object visible under the mask that could "
+            f"plausibly be a {cls} — even if small, distant, partially occluded, or "
+            "low-resolution. Err on the side of GOOD when uncertain about small objects.\n\n"
+            f"Mark as BAD if the mask covers background rather than a {cls}: "
+            "vegetation (trees, bushes, shrubs, hedges), grass, road surface, open sky, "
+            "a building wall, or a shapeless blob with no distinct object outline.\n\n"
             "Reply with exactly one word: GOOD or BAD"
         )

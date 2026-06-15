@@ -48,6 +48,7 @@ from core.triage import (
 )
 from output.annotation_writer import write_annotation
 from output.results_writer import write_frame_result, write_summary
+from visualize_results import visualize_frame
 from vlm.client import VLMClient
 
 
@@ -74,10 +75,10 @@ def check_ollama(model: str) -> None:
         sys.exit(f"  ERROR: cannot reach Ollama at {config.OLLAMA_URL} — {e}")
 
 
-def build_agents(vlm: VLMClient) -> dict:
+def build_agents(vlm: VLMClient, swin_agent=None) -> dict:
     return {
         "bbox": BBoxAgent(vlm),
-        "quality": QualityAgent(vlm),
+        "quality": swin_agent if swin_agent is not None else QualityAgent(vlm),
         "consistency": ConsistencyAgent(),       # deterministic, no VLM
         "correction": CorrectionAgent(vlm),
         "failure_mode": FailureModeAgent(vlm),   # diagnostic only
@@ -115,6 +116,23 @@ def metadata_verdict(proposal: MaskProposal, bundle: Bundle) -> str | None:
 def triage_mask(agents: dict, bundle: Bundle, diagnose: bool) -> TriageResult:
     """Run the agent cascade on one mask and combine via the triage rules."""
     consistency_out = agents["consistency"].run(bundle)
+
+    # High Swin confidence: skip bbox VLM call entirely and treat as valid.
+    from agents.swin_quality_agent import SwingQualityAgent
+    quality_agent = agents["quality"]
+    if isinstance(quality_agent, SwingQualityAgent):
+        swin_score = quality_agent.agreement(bundle)
+        if swin_score is not None and swin_score >= config.SWIN_SKIP_BBOX_THRESHOLD:
+            bbox_out = "valid"
+            quality_out = "good"
+            correction_out = None
+            if consistency_out == "fail":
+                correction_out = agents["correction"].run(bundle)
+            result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
+            if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
+                result.failure_mode_out = agents["failure_mode"].run(bundle)
+            return result
+
     bbox_out = agents["bbox"].run(bundle)
 
     # Early exit: rejection already decided — skip the quality call.
@@ -145,9 +163,10 @@ def process_frame(
     ann_out_dir: Path,
     results_out_dir: Path,
     diagnose: bool,
+    swin_agent=None,
 ) -> dict:
     # Build per-frame agents so BBoxAgent._expected_class is thread-local.
-    agents = build_agents(vlm)
+    agents = build_agents(vlm, swin_agent=swin_agent)
 
     ann_path = config.ANNOTATION_SAM_DIR / f"{frame_id}.png"
     cam_path = config.CAMERA_DIR / f"{frame_id}.png"
@@ -170,8 +189,17 @@ def process_frame(
     triage_results: list[TriageResult] = []
     n_auto = 0
 
-    for proposal in proposals:
+    swin_pred = None
+    if swin_agent is not None:
+        swin_pred = swin_agent.predict_frame(camera_img, lidar_img)
+
+    n_masks = len(proposals)
+    for i, proposal in enumerate(proposals):
+        cls = config.CLASS_ID_TO_NAME.get(proposal.class_id, str(proposal.class_id))
+        tqdm.write(f"  {frame_id}  mask {i+1}/{n_masks}  {cls}  px={proposal.pixel_count}")
+
         bundle = build_bundle(proposal, camera_img, lidar_img)
+        bundle.swin_pred = swin_pred
 
         verdict = metadata_verdict(proposal, bundle)
         if verdict is not None:
@@ -194,7 +222,9 @@ def process_frame(
     )
 
     write_annotation(frame_id, original_ann, proposals, triage_results, ann_out_dir)
-    return write_frame_result(frame_id, proposals, triage_results, results_out_dir)
+    result = write_frame_result(frame_id, proposals, triage_results, results_out_dir)
+    visualize_frame(frame_id, config.VIS_DIR)
+    return result
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -205,16 +235,23 @@ def main():
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--frames", type=Path, default=None,
+                        help="override frames CSV (default: config.FRAMES_FILE)")
     parser.add_argument("--diagnose", action="store_true",
                         help="run the failure-mode agent on rejected/review masks")
     parser.add_argument("--hpc", action="store_true",
                         help="use HPC data paths (totahv@base.hpc.taltech.ee)")
-    parser.add_argument("--workers", type=int, default=4,
-                        help="parallel frame workers (default 4; reduce if GPU OOMs)")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="parallel frame workers (default: config.WORKERS — 1 local, 4 HPC)")
+    parser.add_argument("--no-swin", action="store_true",
+                        help="use VLM quality agent instead of Swin segmentation model")
     args = parser.parse_args()
 
     if args.hpc:
         config.use_hpc()
+
+    if args.frames:
+        config.FRAMES_FILE = args.frames
 
     if args.mock:
         from vlm.mock_client import MockClient
@@ -243,12 +280,26 @@ def main():
                      if not (results_out_dir / f"{f}.json").exists()]
         print(f"Resume: {len(frame_ids)} remaining ({before - len(frame_ids)} done)")
 
+    swin_agent = None
+    if not args.no_swin:
+        from agents.swin_quality_agent import SwingQualityAgent
+        print(f"Swin: loading model on {config.SWIN_DEVICE}...")
+        swin_agent = SwingQualityAgent(
+            threshold=config.SWIN_AGREEMENT_THRESHOLD,
+            device=config.SWIN_DEVICE,
+        )
+        _ = swin_agent.model  # eagerly load so workers share one copy
+        print("Swin: model ready")
+
     frame_records = []
     with tqdm(total=len(frame_ids), desc="Frames", unit="frame") as bar:
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        workers = args.workers if args.workers is not None else config.WORKERS
+        print(f"Workers: {workers}")
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
                 executor.submit(
-                    process_frame, fid, vlm, ann_out_dir, results_out_dir, args.diagnose
+                    process_frame, fid, vlm, ann_out_dir, results_out_dir,
+                    args.diagnose, swin_agent,
                 ): fid
                 for fid in frame_ids
             }
@@ -264,8 +315,9 @@ def main():
 
     write_summary(frame_records, results_out_dir)
     print(f"\nDone. {len(frame_records)} frames processed.")
-    print(f"  Annotations → {ann_out_dir}")
-    print(f"  Results     → {results_out_dir}")
+    print(f"  Annotations    → {ann_out_dir}")
+    print(f"  Results        → {results_out_dir}")
+    print(f"  Visualizations → {config.VIS_DIR}")
 
 
 if __name__ == "__main__":

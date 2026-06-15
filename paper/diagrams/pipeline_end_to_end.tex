@@ -1,45 +1,61 @@
 \begin{tikzpicture}[
   >=Stealth,
-  node distance=6mm,
+  node distance=3.5mm,
   every node/.style={font=\small},
-  block/.style={draw, rounded corners, align=center, minimum width=34mm, minimum height=8mm, fill=blue!10},
-  stage/.style={draw, rounded corners, align=center, minimum width=34mm, minimum height=8mm, fill=green!12},
-  agent/.style={draw, rounded corners, align=center, minimum width=34mm, minimum height=8mm, fill=purple!12},
-  decision/.style={draw, rounded corners, align=center, minimum width=40mm, minimum height=9mm, fill=yellow!18},
-  sideagent/.style={draw, rounded corners, align=center, minimum width=30mm, minimum height=8mm, fill=purple!10}
+  block/.style={draw, rounded corners, align=center,
+                minimum width=30mm, minimum height=7mm, fill=blue!10},
+  stage/.style={draw, rounded corners, align=center,
+                minimum width=30mm, minimum height=7mm, fill=green!12},
+  agent/.style={draw, rounded corners, align=center,
+                minimum width=30mm, minimum height=7mm, fill=purple!12},
+  swinagent/.style={draw, rounded corners, align=center,
+                    minimum width=30mm, minimum height=7mm, fill=orange!18},
+  decision/.style={draw, rounded corners, align=center,
+                   minimum width=34mm, minimum height=8mm, fill=yellow!18},
+  bypass/.style={dashed, gray, ->},
 ]
 
-  % Main pipeline
-  \node[block] (input) {Input Frame\\Camera + LiDAR + 2D Proposals};
+%% ── Main vertical chain ──────────────────────────────────────────────────────
+\node[block] (input)
+  {Input Frame\\[-1pt]{\scriptsize Camera + LiDAR + SAM Masks}};
 
-  \node[stage, below=of input] (sam) {SAM Mask Generation};
+\node[stage, below=of input] (bundle)
+  {Multimodal Bundle\\[-1pt]{\scriptsize RGB Crop + Overlay + Depth Map}};
 
-  \node[stage, below=of sam] (multi)
-  {Multimodal Input Construction\\RGB Crop + Mask Overlay + Depth Map + Metadata};
+\node[swinagent, below=of bundle] (swin)
+  {Swin Quality Agent\\[-1pt]{\scriptsize one forward pass per frame}};
 
-  % Main agent sequence
-  \node[agent, below=of multi] (a1) {BBox Agent (Visual-LLM)};
-  \node[agent, below=of a1] (a2) {Quality Agent (Visual-LLM)};
-  \node[agent, below=of a2] (a5) {Consistency Agent (Visual-LLM)};
-  \node[agent, below=of a5] (a4) {Correction Agent (Visual-LLM)};
+\node[agent, below=7mm of swin] (bbox)
+  {BBox Agent (VLM)\\[-1pt]{\scriptsize valid / invalid / background}};
 
-  % Failure-mode agent (side)
-  \node[sideagent, right=16mm of a2] (a3) {Failure-Mode Agent};
+\node[agent, below=of bbox] (consist)
+  {Consistency Check (det.)\\[-1pt]{\scriptsize LiDAR support threshold}};
 
-  % Final triage
-  \node[decision, below=of a4, minimum width=48mm]
-  (triage) {Rule-Based Triage Decision\\accept / refine / reject / review};
+\node[agent, below=of consist] (correct)
+  {Correction Agent (VLM)\\[-1pt]{\scriptsize refine / no\_refine}};
 
-  % Arrows: pipeline
-  \draw[->] (input) -- (sam);
-  \draw[->] (sam) -- (multi);
-  \draw[->] (multi) -- (a1);
-  \draw[->] (a1) -- (a2);
-  \draw[->] (a2) -- (a5);
-  \draw[->] (a5) -- (a4);
-  \draw[->] (a4) -- (triage);
+\node[decision, below=of correct] (triage)
+  {Triage Decision\\[-1pt]{\scriptsize accept / refine / reject / review}};
 
-  % Arrows: failure-mode agent
-  \draw[->] (a3.south west) -- (triage.north east);
+%% ── Failure-mode agent (diagnostic, bottom-right) ────────────────────────────
+\node[agent, below right=4mm and 2mm of triage, anchor=north west,
+      minimum width=26mm, fill=purple!8] (fma)
+  {Failure-Mode Agent\\[-1pt]{\scriptsize diagnostic only}};
+
+%% ── Main flow arrows ─────────────────────────────────────────────────────────
+\draw[->] (input)   -- (bundle);
+\draw[->] (bundle)  -- (swin);
+\draw[->] (swin)    -- node[right, font=\scriptsize]{$\alpha < \tau_s$} (bbox);
+\draw[->] (bbox)    -- (consist);
+\draw[->] (consist) -- (correct);
+\draw[->] (correct) -- (triage);
+\draw[->] (triage.south) -- ++(0,-3mm) -| (fma.north);
+
+%% ── Swin high-confidence bypass (left gutter, skips BBox) ───────────────────
+\draw[bypass]
+  (swin.west)
+  -- node[above, font=\scriptsize]{$\alpha{\geq}\tau_s$} ++(-8mm, 0)
+  -- ([xshift=-8mm]consist.west)
+  -- (consist.west);
 
 \end{tikzpicture}
