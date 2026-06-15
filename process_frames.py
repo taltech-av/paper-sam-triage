@@ -113,7 +113,8 @@ def metadata_verdict(proposal: MaskProposal, bundle: Bundle) -> str | None:
 
 # ── Stage 2: per-mask agent triage ───────────────────────────────────────────
 
-def triage_mask(agents: dict, bundle: Bundle, diagnose: bool) -> TriageResult:
+def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
+                swin_score: float | None = None) -> TriageResult:
     """Run the agent cascade on one mask and combine via the triage rules."""
     consistency_out = agents["consistency"].run(bundle)
 
@@ -121,7 +122,6 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool) -> TriageResult:
     from agents.swin_quality_agent import SwingQualityAgent
     quality_agent = agents["quality"]
     if isinstance(quality_agent, SwingQualityAgent):
-        swin_score = quality_agent.agreement(bundle)
         if swin_score is not None and swin_score >= config.SWIN_SKIP_BBOX_THRESHOLD:
             bbox_out = "valid"
             quality_out = "good"
@@ -129,6 +129,8 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool) -> TriageResult:
             if consistency_out == "fail":
                 correction_out = agents["correction"].run(bundle)
             result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
+            result.swin_score = swin_score
+            result.swin_bypass = True
             if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
                 result.failure_mode_out = agents["failure_mode"].run(bundle)
             return result
@@ -147,6 +149,7 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool) -> TriageResult:
         correction_out = agents["correction"].run(bundle)
 
     result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
+    result.swin_score = swin_score
 
     # Failure-mode diagnosis for non-accepted masks (analysis only)
     if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
@@ -164,6 +167,7 @@ def process_frame(
     results_out_dir: Path,
     diagnose: bool,
     swin_agent=None,
+    discovery_agent=None,
 ) -> dict:
     # Build per-frame agents so BBoxAgent._expected_class is thread-local.
     agents = build_agents(vlm, swin_agent=swin_agent)
@@ -201,6 +205,10 @@ def process_frame(
         bundle = build_bundle(proposal, camera_img, lidar_img)
         bundle.swin_pred = swin_pred
 
+        # Pre-compute raw scores for offline replay (saved regardless of triage path)
+        swin_score = swin_agent.agreement(bundle) if swin_agent is not None else None
+        lidar_support = bundle.metadata.get("lidar_support_ratio")
+
         verdict = metadata_verdict(proposal, bundle)
         if verdict is not None:
             n_auto += 1
@@ -208,10 +216,13 @@ def process_frame(
                 decision=verdict,
                 bbox_out=None, quality_out=None, failure_mode_out=None,
                 correction_out=None, consistency_out=None,
+                swin_score=swin_score, lidar_support=lidar_support,
             ))
             continue
 
-        triage_results.append(triage_mask(agents, bundle, diagnose))
+        result = triage_mask(agents, bundle, diagnose, swin_score=swin_score)
+        result.lidar_support = lidar_support
+        triage_results.append(result)
 
     counts = {d: sum(1 for r in triage_results if r.decision == d)
               for d in (TRIAGE_ACCEPT, "refine", TRIAGE_REJECT, TRIAGE_REVIEW)}
@@ -221,8 +232,18 @@ def process_frame(
         f"auto={n_auto}/{len(proposals)}  ({time.time()-t0:.1f}s)"
     )
 
-    write_annotation(frame_id, original_ann, proposals, triage_results, ann_out_dir)
-    result = write_frame_result(frame_id, proposals, triage_results, results_out_dir)
+    discovered = []
+    if discovery_agent is not None and swin_pred is not None:
+        try:
+            discovered = discovery_agent.run(swin_pred, original_ann, camera_img)
+            if discovered:
+                n_confirmed = sum(1 for d in discovered if d.confirmed)
+                tqdm.write(f"  {frame_id}  discovery: {n_confirmed}/{len(discovered)} confirmed")
+        except Exception as e:
+            tqdm.write(f"  {frame_id}  discovery ERROR (skipped): {e}")
+
+    write_annotation(frame_id, original_ann, proposals, triage_results, ann_out_dir, discovered)
+    result = write_frame_result(frame_id, proposals, triage_results, results_out_dir, discovered)
     visualize_frame(frame_id, config.VIS_DIR)
     return result
 
@@ -245,6 +266,8 @@ def main():
                         help="parallel frame workers (default: config.WORKERS — 1 local, 4 HPC)")
     parser.add_argument("--no-swin", action="store_true",
                         help="use VLM quality agent instead of Swin segmentation model")
+    parser.add_argument("--no-discovery", action="store_true",
+                        help="disable Swin-based object discovery (missed object recovery)")
     args = parser.parse_args()
 
     if args.hpc:
@@ -291,6 +314,12 @@ def main():
         _ = swin_agent.model  # eagerly load so workers share one copy
         print("Swin: model ready")
 
+    discovery_agent = None
+    if swin_agent is not None and not args.no_discovery:
+        from agents.discovery_agent import DiscoveryAgent
+        discovery_agent = DiscoveryAgent(vlm)
+        print(f"Discovery: enabled (min_pixels={config.DISCOVERY_MIN_PIXELS})")
+
     frame_records = []
     with tqdm(total=len(frame_ids), desc="Frames", unit="frame") as bar:
         workers = args.workers if args.workers is not None else config.WORKERS
@@ -299,7 +328,7 @@ def main():
             futures = {
                 executor.submit(
                     process_frame, fid, vlm, ann_out_dir, results_out_dir,
-                    args.diagnose, swin_agent,
+                    args.diagnose, swin_agent, discovery_agent,
                 ): fid
                 for fid in frame_ids
             }

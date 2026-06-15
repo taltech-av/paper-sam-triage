@@ -47,6 +47,7 @@ ollama run "$MODEL" <<< "warmup"
 # ── Run pipeline ──────────────────────────────────────────────────────────────
 # Quality agent: Swin segmentation model (default). Pass --no-swin to use VLM instead.
 # Workers: 4 (set by --hpc via config.WORKERS).
+# Discovery: add --discovery to enable missed-object recovery (extra VLM calls per frame).
 echo "[$(date)] Starting pipeline..."
 cd "$PIPELINE_DIR"
 python process_frames.py --model "$MODEL" --resume --hpc

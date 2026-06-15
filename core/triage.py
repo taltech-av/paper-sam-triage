@@ -16,6 +16,10 @@ class TriageResult:
     failure_mode_out: Optional[str]
     correction_out: Optional[str]
     consistency_out: Optional[str]
+    # Raw scores for offline triage replay (thresholds applied post-hoc)
+    swin_score: Optional[float] = None
+    lidar_support: Optional[float] = None
+    swin_bypass: bool = False
 
 
 def triage(

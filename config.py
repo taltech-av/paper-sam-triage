@@ -87,6 +87,14 @@ VLM_MAX_RETRIES = 1
 # --- Parallelism ---
 WORKERS = 4
 
+# --- Object discovery (Swin-detected regions absent from annotation_sam) ---
+# Minimum connected-component size in 384×384 Swin space to be considered a candidate.
+# Corresponds to ~80 px in the 768px camera image.
+DISCOVERY_MIN_PIXELS = 20
+# Maximum VLM confirmation calls per frame — largest candidates are evaluated first.
+# Caps Ollama load when many uncovered regions exist.
+DISCOVERY_MAX_CANDIDATES = 5
+
 # --- Swin quality agent ---
 FUSION_DIR = Path("/run/media/tom/ml/projects/fusion-training")
 SWIN_CFG_PATH  = FUSION_DIR / "config/zod/swin/config_9.json"

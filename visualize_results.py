@@ -32,6 +32,10 @@ TRIAGE_COLORS = {
     "human_review": (200, 80,   0,   90),    # blue
 }
 
+# BGR colors for discovered mask borders and fill
+DISCOVERY_CONFIRMED_COLOR = (0, 165, 255)   # orange
+DISCOVERY_REJECTED_COLOR  = (120, 120, 120) # gray
+
 
 def overlay_mask(canvas_bgr: np.ndarray, mask: np.ndarray, bgra_color: tuple) -> None:
     """Alpha-blend a colored mask onto canvas in-place."""
@@ -62,6 +66,23 @@ def visualize_frame(frame_id: str, out_dir: Path) -> None:
         if color is not None:
             overlay_mask(canvas, p.pixel_mask, color)
 
+    # Draw discovered masks as filled rectangles with border and class label
+    for disc in result.get("discovered", []):
+        x1, y1, x2, y2 = disc["bbox_orig"]
+        color = DISCOVERY_CONFIRMED_COLOR if disc["confirmed"] else DISCOVERY_REJECTED_COLOR
+        # Semi-transparent fill
+        overlay = canvas.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+        cv2.addWeighted(overlay, 0.35, canvas, 0.65, 0, canvas)
+        # Solid border
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
+        # Label: class name + confirmed/rejected
+        label = disc["class_name"] if disc["confirmed"] else f"rejected ({disc['vlm_response']})"
+        cv2.putText(canvas, label, (x1 + 4, y1 + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(canvas, label, (x1 + 4, y1 + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
+
     _draw_legend(canvas)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -69,22 +90,22 @@ def visualize_frame(frame_id: str, out_dir: Path) -> None:
 
 
 def _draw_legend(img: np.ndarray) -> None:
-    entries = [
-        ("accepted", TRIAGE_COLORS["accept"]),
-        ("refine",   TRIAGE_COLORS["refine"]),
-        ("rejected", TRIAGE_COLORS["reject"]),
-        ("review",   TRIAGE_COLORS["human_review"]),
+    triage_entries = [
+        ("accepted",          (TRIAGE_COLORS["accept"][0],       TRIAGE_COLORS["accept"][1],       TRIAGE_COLORS["accept"][2])),
+        ("refine",            (TRIAGE_COLORS["refine"][0],        TRIAGE_COLORS["refine"][1],        TRIAGE_COLORS["refine"][2])),
+        ("rejected",          (TRIAGE_COLORS["reject"][0],        TRIAGE_COLORS["reject"][1],        TRIAGE_COLORS["reject"][2])),
+        ("review",            (TRIAGE_COLORS["human_review"][0],  TRIAGE_COLORS["human_review"][1],  TRIAGE_COLORS["human_review"][2])),
+        ("discovered",        DISCOVERY_CONFIRMED_COLOR),
+        ("disc. rejected",    DISCOVERY_REJECTED_COLOR),
     ]
     x, y0, pad = 12, 12, 4
     h_entry = 22
     box_w = 16
 
-    for i, (label, (b, g, r, _)) in enumerate(entries):
+    for i, (label, color) in enumerate(triage_entries):
         y = y0 + i * (h_entry + pad)
-        # colored box
-        cv2.rectangle(img, (x, y), (x + box_w, y + h_entry), (b, g, r), -1)
+        cv2.rectangle(img, (x, y), (x + box_w, y + h_entry), color, -1)
         cv2.rectangle(img, (x, y), (x + box_w, y + h_entry), (0, 0, 0), 1)
-        # label
         cv2.putText(img, label, (x + box_w + 6, y + h_entry - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(img, label, (x + box_w + 6, y + h_entry - 5),
