@@ -113,35 +113,47 @@ def metadata_verdict(proposal: MaskProposal, bundle: Bundle) -> str | None:
 
 # ── Stage 2: per-mask agent triage ───────────────────────────────────────────
 
+def _timed(fn) -> tuple:
+    """Call fn(), return (result, elapsed_seconds)."""
+    t = time.perf_counter()
+    out = fn()
+    return out, round(time.perf_counter() - t, 4)
+
+
 def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
                 swin_score: float | None = None) -> TriageResult:
-    """Run the full agent cascade on one mask and combine via the triage rules.
+    """Run the full agent cascade on one mask — all agents always called."""
+    elapsed: dict[str, float] = {}
+    vlm_calls = 0
 
-    The Swin bypass threshold is recorded in swin_bypass for offline ablation
-    analysis but does NOT skip any agent call — all signals are always collected.
-    """
-    consistency_out = agents["consistency"].run(bundle)
+    consistency_out, elapsed["consistency"] = _timed(lambda: agents["consistency"].run(bundle))
 
-    # Record whether Swin bypass WOULD have fired (for ablation analysis in replay_triage.py).
     from agents.swin_quality_agent import SwingQualityAgent
     swin_bypass = False
     if isinstance(agents["quality"], SwingQualityAgent) and swin_score is not None:
         cls_id = bundle.metadata.get("class_id")
         swin_bypass = swin_score >= config.swin_skip_threshold(cls_id)
 
-    bbox_out = agents["bbox"].run(bundle)
-    quality_out = agents["quality"].run(bundle)
+    bbox_out, elapsed["bbox"] = _timed(lambda: agents["bbox"].run(bundle))
+    vlm_calls += 1
+
+    quality_out, elapsed["quality"] = _timed(lambda: agents["quality"].run(bundle))
 
     correction_out = None
     if bbox_out == "valid" and quality_out == "good" and consistency_out == "fail":
-        correction_out = agents["correction"].run(bundle)
+        correction_out, elapsed["correction"] = _timed(lambda: agents["correction"].run(bundle))
+        vlm_calls += 1
 
     result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
     result.swin_score = swin_score
     result.swin_bypass = swin_bypass
+    result.agent_elapsed = elapsed
+    result.vlm_calls = vlm_calls
 
     if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
-        result.failure_mode_out = agents["failure_mode"].run(bundle)
+        result.failure_mode_out, elapsed["failure_mode"] = _timed(
+            lambda: agents["failure_mode"].run(bundle))
+        vlm_calls += 1
 
     return result
 
@@ -177,13 +189,19 @@ def process_frame(
         write_annotation(frame_id, original_ann, [], [], ann_out_dir)
         return write_frame_result(frame_id, [], [], results_out_dir)
 
-    t0 = time.time()
+    import datetime
+    frame_start = time.perf_counter()
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     triage_results: list[TriageResult] = []
+    mask_elapsed: list[float] = []
     n_auto = 0
 
     swin_pred = None
+    swin_elapsed = 0.0
     if swin_agent is not None:
+        t_swin = time.perf_counter()
         swin_pred = swin_agent.predict_frame(camera_img, lidar_img)
+        swin_elapsed = round(time.perf_counter() - t_swin, 4)
 
     n_masks = len(proposals)
     for i, proposal in enumerate(proposals):
@@ -193,10 +211,10 @@ def process_frame(
         bundle = build_bundle(proposal, camera_img, lidar_img)
         bundle.swin_pred = swin_pred
 
-        # Pre-compute raw scores for offline replay (saved regardless of triage path)
         swin_score = swin_agent.agreement(bundle) if swin_agent is not None else None
         lidar_support = bundle.metadata.get("lidar_support_ratio")
 
+        t_mask = time.perf_counter()
         verdict = metadata_verdict(proposal, bundle)
         if verdict is not None:
             n_auto += 1
@@ -206,22 +224,27 @@ def process_frame(
                 correction_out=None, consistency_out=None,
                 swin_score=swin_score, lidar_support=lidar_support,
             ))
+            mask_elapsed.append(round(time.perf_counter() - t_mask, 4))
             continue
 
         result = triage_mask(agents, bundle, diagnose, swin_score=swin_score)
         result.lidar_support = lidar_support
         triage_results.append(result)
+        mask_elapsed.append(round(time.perf_counter() - t_mask, 4))
 
+    triage_elapsed = round(time.perf_counter() - frame_start, 4)
     counts = {d: sum(1 for r in triage_results if r.decision == d)
               for d in (TRIAGE_ACCEPT, "refine", TRIAGE_REJECT, TRIAGE_REVIEW)}
     tqdm.write(
         f"  {frame_id}  accept={counts['accept']} refine={counts['refine']} "
         f"reject={counts['reject']} review={counts['human_review']}  "
-        f"auto={n_auto}/{len(proposals)}  ({time.time()-t0:.1f}s)"
+        f"auto={n_auto}/{len(proposals)}  ({triage_elapsed:.1f}s)"
     )
 
     discovered = []
+    discovery_elapsed = 0.0
     if discovery_agent is not None and swin_pred is not None:
+        t_disc = time.perf_counter()
         try:
             discovered = discovery_agent.run(swin_pred, original_ann, camera_img)
             if discovered:
@@ -229,9 +252,29 @@ def process_frame(
                 tqdm.write(f"  {frame_id}  discovery: {n_confirmed}/{len(discovered)} confirmed")
         except Exception as e:
             tqdm.write(f"  {frame_id}  discovery ERROR (skipped): {e}")
+        discovery_elapsed = round(time.perf_counter() - t_disc, 4)
+
+    total_vlm_calls = sum(r.vlm_calls for r in triage_results)
+    n_bypass = sum(1 for r in triage_results if r.swin_bypass)
+    run_info = {
+        "model": vlm.model if hasattr(vlm, "model") else str(vlm),
+        "timestamp": timestamp,
+        "elapsed_seconds": round(time.perf_counter() - frame_start, 2),
+        "triage_elapsed_seconds": triage_elapsed,
+        "swin_elapsed_seconds": swin_elapsed,
+        "discovery_elapsed_seconds": discovery_elapsed,
+        "n_masks": len(proposals),
+        "n_auto_rejected": n_auto,
+        "n_vlm_calls": total_vlm_calls,
+        "n_swin_bypass": n_bypass,
+        "workers": config.WORKERS,
+    }
 
     write_annotation(frame_id, original_ann, proposals, triage_results, ann_out_dir, discovered)
-    result = write_frame_result(frame_id, proposals, triage_results, results_out_dir, discovered)
+    result = write_frame_result(
+        frame_id, proposals, triage_results, results_out_dir, discovered,
+        mask_elapsed=mask_elapsed, run_info=run_info,
+    )
     visualize_frame(frame_id, config.VIS_DIR)
     return result
 

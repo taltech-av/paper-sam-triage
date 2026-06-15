@@ -20,6 +20,10 @@ class TriageResult:
     swin_score: Optional[float] = None
     lidar_support: Optional[float] = None
     swin_bypass: bool = False
+    # Timing: seconds spent in each agent call (only populated agents present)
+    agent_elapsed: Optional[dict] = None
+    # Number of actual VLM HTTP calls made for this mask
+    vlm_calls: int = 0
 
 
 def triage(

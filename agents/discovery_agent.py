@@ -116,7 +116,16 @@ class DiscoveryAgent:
             bbox_384 = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
 
             crop, bbox_orig = _extract_crop(camera_bgr, bbox_384, H, W)
-            response = self.vlm.query([crop], _CONFIRM_PROMPTS[swin_cls]).strip().lower().rstrip(".")
+            response = None
+            for attempt in range(config.VLM_MAX_RETRIES + 1):
+                try:
+                    response = self.vlm.query([crop], _CONFIRM_PROMPTS[swin_cls]).strip().lower().rstrip(".")
+                    break
+                except Exception:
+                    if attempt == config.VLM_MAX_RETRIES:
+                        response = None
+            if response is None:
+                continue
 
             confirmed = response in _VALID_RESPONSES[swin_cls]
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=vlm-pipeline
+#SBATCH --job-name=vlm-pip
 #SBATCH --gres=gpu:A100:1
 #SBATCH --constraint=A100-80
 #SBATCH --cpus-per-task=8

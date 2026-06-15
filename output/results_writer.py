@@ -12,12 +12,14 @@ def write_frame_result(
     triage_results: list[TriageResult],
     out_dir: Path,
     discovered: list | None = None,
+    mask_elapsed: list[float] | None = None,
+    run_info: dict | None = None,
 ) -> dict:
     """Write per-frame JSON and return the dict for summary aggregation."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
     masks = []
-    for proposal, result in zip(proposals, triage_results):
+    for i, (proposal, result) in enumerate(zip(proposals, triage_results)):
         masks.append({
             "mask_id": proposal.mask_id,
             "class_id": proposal.class_id,
@@ -39,6 +41,11 @@ def write_frame_result(
                 "swin_skip_threshold": config.swin_skip_threshold(proposal.class_id),
             },
             "triage": result.decision,
+            "timing": {
+                "elapsed_seconds": mask_elapsed[i] if mask_elapsed else None,
+                "agent_seconds": result.agent_elapsed,
+                "vlm_calls": result.vlm_calls,
+            },
             "metadata": {k: v for k, v in proposal.metadata.items()
                          if k not in ("pixel_mask",)},
         })
@@ -57,7 +64,12 @@ def write_frame_result(
                 "confirmed": disc.confirmed,
             })
 
-    frame_record = {"frame_id": frame_id, "masks": masks, "discovered": discoveries}
+    frame_record = {
+        "frame_id": frame_id,
+        "run_info": run_info or {},
+        "masks": masks,
+        "discovered": discoveries,
+    }
     out_path = out_dir / f"{frame_id}.json"
     out_path.write_text(json.dumps(frame_record, indent=2))
     return frame_record

@@ -93,7 +93,7 @@ CLASS_COLORS_BGR = {
 # --- VLM backend ---
 OLLAMA_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen2.5vl:7b"
-VLM_TIMEOUT = 90          # seconds per call (local 7B; use_hpc() raises to 120 for 72B/90B)
+VLM_TIMEOUT = 120          # seconds per call (local 7B; use_hpc() raises to 120 for 72B/90B)
 VLM_MAX_RETRIES = 1
 
 # --- Parallelism ---
