@@ -38,7 +38,7 @@ def use_hpc():
     global DATA_ROOT, CAMERA_DIR, LIDAR_DIR, ANNOTATION_SAM_DIR
     global ZOD_DATA_ROOT, FUSION_DIR, SWIN_CFG_PATH, SWIN_CKPT_PATH, WORKERS
     global DISCOVERY_MAX_CANDIDATES, VLM_TIMEOUT
-    WORKERS = 16
+    WORKERS = 4
     DISCOVERY_MAX_CANDIDATES = 20   # HPC GPU responds faster, can handle more per frame
     VLM_TIMEOUT = 120               # larger models (72B/90B) need more time per call
     DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
