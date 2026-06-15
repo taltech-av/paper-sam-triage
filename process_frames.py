@@ -47,6 +47,7 @@ from core.triage import (
     TRIAGE_ACCEPT, TRIAGE_REJECT, TRIAGE_REVIEW, TriageResult, triage,
 )
 from output.annotation_writer import write_annotation
+from core.triage import TRIAGE_REJECT as _TRIAGE_REJECT
 from output.results_writer import write_frame_result, write_summary
 from visualize_results import visualize_frame
 from vlm.client import VLMClient
@@ -156,6 +157,61 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
         vlm_calls += 1
 
     return result
+
+
+# ── Variant annotation writers ───────────────────────────────────────────────
+
+def _compute_variant_decisions(
+    proposals: list, triage_results: list
+) -> dict[str, dict[int, str]]:
+    """Derive per-mask decisions for all training-data variants from in-memory results.
+
+    Variants produced:
+        raw_sam   — no triage, accept everything (true SAM baseline)
+        swin_only — Swin agreement threshold only, per-class τ_q
+        vlm_only  — BBox VLM + consistency, Swin quality ignored
+        triage    — full concordance triage, no discovery
+    """
+    from core.triage import triage as _triage
+    raw_sam, swin_only, vlm_only, triage_no_disc = {}, {}, {}, {}
+    for proposal, result in zip(proposals, triage_results):
+        mid = proposal.mask_id
+        cls_id = proposal.class_id
+
+        raw_sam[mid] = "accept"
+
+        swin_only[mid] = (
+            _TRIAGE_REJECT
+            if (result.swin_score is not None
+                and result.swin_score < config.swin_quality_threshold(cls_id))
+            else "accept"
+        )
+
+        # metadata prefilter masks have no agent outputs — propagate their reject
+        is_auto = (result.bbox_out is None and result.consistency_out is None
+                   and result.decision == _TRIAGE_REJECT)
+        vlm_only[mid] = (
+            _TRIAGE_REJECT if is_auto
+            else _triage(result.bbox_out, None, None, result.correction_out,
+                         result.consistency_out).decision
+        )
+
+        triage_no_disc[mid] = result.decision
+
+    return {"raw_sam": raw_sam, "swin_only": swin_only,
+            "vlm_only": vlm_only, "triage": triage_no_disc}
+
+
+def _write_variant(
+    frame_id: str, original_ann: np.ndarray, proposals: list,
+    decisions: dict[int, str], out_dir: Path,
+) -> None:
+    refined = original_ann.copy()
+    for p in proposals:
+        if decisions.get(p.mask_id) == _TRIAGE_REJECT:
+            refined[p.pixel_mask] = 0
+    out_dir.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(refined.astype(np.uint8)).save(out_dir / f"{frame_id}.png")
 
 
 # ── Frame processor ──────────────────────────────────────────────────────────
@@ -271,6 +327,13 @@ def process_frame(
     }
 
     write_annotation(frame_id, original_ann, proposals, triage_results, ann_out_dir, discovered)
+
+    # Write all training-data variants in one pass while pixel masks are in memory
+    variants = _compute_variant_decisions(proposals, triage_results)
+    for variant_name, decisions in variants.items():
+        _write_variant(frame_id, original_ann, proposals, decisions,
+                       ann_out_dir.parent / f"annotation_{variant_name}")
+
     result = write_frame_result(
         frame_id, proposals, triage_results, results_out_dir, discovered,
         mask_elapsed=mask_elapsed, run_info=run_info,
