@@ -88,15 +88,17 @@ def aggregate(records: list[dict]) -> dict:
                 if bbox is None and qual is None:
                     reject_causes["(1) Metadata prefilter — extreme geometry"] += 1
                 elif bbox == "background":
-                    reject_causes["(2) BBox=background  [2 negatives, VLM-only]"] += 1
-                elif bbox == "invalid" and cons == "fail":
-                    reject_causes["(3) BBox=invalid + Consistency=fail"] += 1
+                    reject_causes["(2) BBox=background alone [direct evidence]"] += 1
+                elif bbox == "invalid" and cons == "pass":
+                    reject_causes["(3) BBox=invalid + LiDAR confirmed [real content, no object found]"] += 1
                 elif bbox == "invalid" and qual == "bad":
                     reject_causes["(4) BBox=invalid + Swin quality=bad"] += 1
+                elif bbox == "invalid" and cons == "fail":
+                    reject_causes["(5) BBox=invalid + Consistency=fail"] += 1
                 elif qual == "bad" and cons == "fail":
-                    reject_causes["(5) Swin quality=bad + Consistency=fail"] += 1
+                    reject_causes["(6) Swin quality=bad + Consistency=fail"] += 1
                 else:
-                    reject_causes["(6) Other"] += 1
+                    reject_causes["(7) Other"] += 1
 
             if d == "human_review":
                 if bbox == "invalid": review_causes["BBox=invalid (single signal)"] += 1
@@ -280,7 +282,8 @@ confirmed by VLM across the {F} frames ({r['disc_confirmed']/F:.1f} per frame)."
     print(f"\nWHAT CAUSED EACH REJECT  (n={rej})")
     print(SEP)
     print("  Rejection requires ≥2 concordant negative signals.")
-    print("  'background' counts as 2 negatives alone (VLM identified wrong surface type).\n")
+    print("  'background' counts as 2 negatives alone.")
+    print("  'bbox=invalid + LiDAR confirmed' also counts as 2 negatives (special rule).\n")
     for k, v in sorted(r["reject_causes"].items(), key=lambda x: -x[1]):
         print(f"  {k:50s}  {v:4d}  {pct_plain(v,rej)}")
 
