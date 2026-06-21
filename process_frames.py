@@ -205,11 +205,23 @@ def _compute_variant_decisions(
 def _write_variant(
     frame_id: str, original_ann: np.ndarray, proposals: list,
     decisions: dict[int, str], out_dir: Path,
+    discovered=None,
 ) -> None:
     refined = original_ann.copy()
     for p in proposals:
         if decisions.get(p.mask_id) == _TRIAGE_REJECT:
             refined[p.pixel_mask] = 0
+    if discovered:
+        H, W = refined.shape[:2]
+        for disc in discovered:
+            if not disc.confirmed:
+                continue
+            mask_orig = cv2.resize(
+                disc.pixel_mask_384.astype(np.uint8),
+                (W, H), interpolation=cv2.INTER_NEAREST,
+            ).astype(bool)
+            write_pixels = mask_orig & (refined == 0)
+            refined[write_pixels] = disc.class_id
     out_dir.mkdir(parents=True, exist_ok=True)
     Image.fromarray(refined.astype(np.uint8)).save(out_dir / f"{frame_id}.png")
 
@@ -243,6 +255,11 @@ def process_frame(
 
     if not proposals:
         write_annotation(frame_id, original_ann, [], [], ann_out_dir)
+        # All variants are identical to annotation_full when there are no masks to triage
+        for variant in ("raw_sam", "swin_only", "vlm_only", "triage",
+                        "swin_discovery", "raw_sam_discovery"):
+            _write_variant(frame_id, original_ann, [],
+                           {}, ann_out_dir.parent / f"annotation_{variant}")
         return write_frame_result(frame_id, [], [], results_out_dir)
 
     import datetime
@@ -333,6 +350,14 @@ def process_frame(
     for variant_name, decisions in variants.items():
         _write_variant(frame_id, original_ann, proposals, decisions,
                        ann_out_dir.parent / f"annotation_{variant_name}")
+
+    # *_discovery variants: base mask decisions + confirmed discovery objects
+    _write_variant(frame_id, original_ann, proposals, variants["swin_only"],
+                   ann_out_dir.parent / "annotation_swin_discovery",
+                   discovered=discovered)
+    _write_variant(frame_id, original_ann, proposals, variants["raw_sam"],
+                   ann_out_dir.parent / "annotation_raw_sam_discovery",
+                   discovered=discovered)
 
     result = write_frame_result(
         frame_id, proposals, triage_results, results_out_dir, discovered,
@@ -447,6 +472,7 @@ def main():
     write_summary(frame_records, results_out_dir)
     print(f"\nDone. {len(frame_records)} frames processed.")
     print(f"  Annotations    → {ann_out_dir}  (full system: triage + discovery)")
+    print(f"  Variants       → annotation_{{raw_sam,raw_sam_discovery,swin_only,swin_discovery,vlm_only,triage}}")
     print(f"  Results        → {results_out_dir}")
     print(f"  Visualizations → {config.VIS_DIR}")
 

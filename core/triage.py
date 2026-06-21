@@ -58,10 +58,16 @@ def triage(
         consistency_out=consistency_out,
     )
 
-    # bbox=invalid + consistency=pass: LiDAR confirms real content is present but
-    # the bbox agent found no expected object — counts as two negatives together
-    # because absence of object confirmation + confirmed real content = real non-object.
-    bbox_invalid_confirmed = (bbox_out == "invalid" and consistency_out == "pass")
+    # bbox=invalid + consistency=pass counts as two negatives only when the Swin
+    # quality signal also disagrees (quality_out != "good"). If Swin says the
+    # mask pixels DO match the expected class, the VLM crop verdict is likely
+    # a false negative (common for small/thin objects like signs where the
+    # cropped region is ambiguous) — route to human_review instead of rejecting.
+    bbox_invalid_confirmed = (
+        bbox_out == "invalid"
+        and consistency_out == "pass"
+        and quality_out != "good"
+    )
 
     negatives = sum([
         2 * bbox_invalid_confirmed,

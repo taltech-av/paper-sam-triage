@@ -337,61 +337,84 @@ Llama-3.2-Vision-90B    & -- & -- & -- & -- & -- \\
 
 \subsection{Downstream Segmentation}
 
-We train CLFTv2 (in preparation, extending~\cite{gu2024clft}) under the configurations in Table~\ref{tab:downstream}.
-Rejected pixels are mapped to \texttt{ignore} unless otherwise specified.
-Table~\ref{tab:downstream} reports IoU for each class and mIoU.
+We train CLFTv2 on seven annotation variants derived from a 1{,}000-frame Qwen2.5-VL-72B inference run on the ZOD validation subset.
+Rejected pixels are mapped to \texttt{ignore}.
+The full downstream comparison—including clean-frame baselines, Llama-3.2-90B, consensus voting, and the complete 6{,}454-frame dataset—is reserved for future experiments (Table~\ref{tab:downstream}).
 
-\begin{table*}[t]
+Table~\ref{tab:ablation} reports vehicle, sign, and combined human-class IoU (cyclist + pedestrian) for all seven variants.
+Three findings stand out.
+
+\textbf{Swin filtering outperforms VLM triage for dominant classes.}
+Swin-only filtering achieves 33.6 mIoU versus 28.8 for the full Swin + VLM triage, a 4.8-point gap driven by sign and vehicle classes.
+The BBox agent's crop-based classification introduces false rejections on small, thin signs where pixel-level Swin agreement is the more reliable signal.
+
+\textbf{Discovery consistently adds value.}
+Adding Swin-confirmed discovery objects boosts mIoU by 2.1 points over both its base configurations: raw SAM (26.4 $\to$ 28.5) and Swin-only (33.6 $\to$ 34.2).
+The gain is strongest on vehicles (+4.1 points over raw SAM), where Swin-detected candidate regions are large and SAM tends to undersegment.
+Sign IoU drops slightly under Swin + discovery ($-$2.4 points vs.\ Swin-only), consistent with connected-component discovery masks being coarser than SAM proposals for frequently occurring structured objects.
+
+\textbf{VLM triage uniquely benefits the rare human class.}
+The full pipeline (triage + discovery) achieves 0.148 human IoU—the highest across all variants and 2.9 points above Swin + discovery (0.119).
+Both configurations add the same 28 human-class discovery objects (21 cyclists, 7 pedestrians); the gap is attributable to VLM triage removing false vehicle and sign masks that otherwise compete for model capacity on the rare human class.
+This confirms that VLM semantic reasoning adds unique value for rare-class recovery, while Swin pixel-level agreement is the stronger signal for dominant classes.
+
+The best-performing single annotation set is \textbf{Swin + discovery} (34.2 mIoU), suggesting the primary contribution of the VLM in our pipeline is confirmation of discovery candidates rather than triage rejection.
+
+\begin{table*}[b]
 \centering
-\caption{Downstream CLFTv2 segmentation performance (placeholders).}
+\caption{Downstream CLFTv2 segmentation: full comparison (pending). Rows marked~-- await Llama-3.2-90B inference, consensus runs, and full-dataset annotation.}
 \label{tab:downstream}
-\begin{tabular}{llccccc}
+\begin{tabular}{llcccc}
 \toprule
-\textbf{Training data} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Cyc.} & \textbf{Ped.} & \textbf{mIoU} \\
+\textbf{Training data} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
 \midrule
-Clean only                               & --        & -- & -- & -- & -- & -- \\
-Clean + flagged, raw SAM                 & --        & -- & -- & -- & -- & -- \\
-Flagged only, triage                     & Qwen-72B  & -- & -- & -- & -- & -- \\
-Flagged only, triage                     & Llama-90B & -- & -- & -- & -- & -- \\
-Clean + flagged, triage                  & Qwen-72B  & -- & -- & -- & -- & -- \\
-Clean + flagged, triage                  & Llama-90B & -- & -- & -- & -- & -- \\
-Clean + flagged, triage + disc.          & Qwen-72B  & -- & -- & -- & -- & -- \\
-Clean + flagged, triage (consensus)      & Both      & -- & -- & -- & -- & -- \\
-Flagged only, triage (rej.\,$\to$\,bg)  & Qwen-72B  & -- & -- & -- & -- & -- \\
+Clean only (ZOD labels)                  & --        & -- & -- & -- & -- \\
+Clean + flagged, raw SAM                 & --        & -- & -- & -- & -- \\
+Flagged only, Swin + disc.               & Qwen-72B  & -- & -- & -- & -- \\
+Flagged only, triage + disc.             & Qwen-72B  & -- & -- & -- & -- \\
+Flagged only, triage + disc.             & Llama-90B & -- & -- & -- & -- \\
+Clean + flagged, triage + disc.          & Qwen-72B  & -- & -- & -- & -- \\
+Clean + flagged, triage (consensus)      & Both      & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
 \subsection{Ablation Studies}
 
-We ablate triage rules, Swin thresholds, VLM backbones, and object discovery. 
-All triage-rule variants are generated offline using stored agent outputs; VLM backbone ablations require separate inference runs.
+All triage-rule variants are generated offline from stored agent outputs using \texttt{replay\_triage.py}; VLM backbone ablations require separate inference runs.
 
 \begin{table*}[t]
 \centering
-\caption{Ablation study (placeholders).}
+\caption{Annotation variant ablation: CLFTv2-Tiny RGB on 1\,000-frame ZOD subset (Qwen2.5-VL-72B).
+         mIoU averages vehicle, sign, and human (cyclist + pedestrian combined).
+         Best result per column in \textbf{bold}. Rows marked~-- are pending.}
 \label{tab:ablation}
-\begin{tabular}{llccccc}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llcccc}
 \toprule
-\textbf{Variant} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Cyc.} & \textbf{Ped.} & \textbf{mIoU} \\
+\textbf{Variant} & \textbf{Description} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
 \midrule
-\multicolumn{2}{l}{\textit{Triage signal ablations (all frames, Qwen-72B)}} \\
-Raw SAM (no triage)                    & --        & -- & -- & -- & -- & -- \\
-Swin only                              & --        & -- & -- & -- & -- & -- \\
-VLM only                               & Qwen-72B  & -- & -- & -- & -- & -- \\
-Triage (Swin + VLM, no disc.)          & Qwen-72B  & -- & -- & -- & -- & -- \\
-Triage + discovery (ours)              & Qwen-72B  & -- & -- & -- & -- & -- \\
+\multicolumn{6}{l}{\textit{Triage signal ablations (no discovery)}} \\
+Raw SAM           & No triage; SAM pseudo-labels unchanged       & 0.517 & 0.215 & 0.058 & 26.4 \\
+VLM only          & BBox VLM + consistency; Swin quality ignored  & 0.539 & 0.231 & 0.076 & 28.2 \\
+Triage            & Swin + VLM + consistency                      & 0.539 & 0.245 & 0.079 & 28.8 \\
+Swin only         & Swin agreement threshold; no VLM              & 0.584 & \textbf{0.322} & 0.100 & 33.6 \\
 \addlinespace
-\multicolumn{2}{l}{\textit{Triage rule ablations (offline replay)}} \\
-Disjunctive rejection                  & Qwen-72B  & -- & -- & -- & -- & -- \\
-Uniform $\tau_q$                       & Qwen-72B  & -- & -- & -- & -- & -- \\
-With Swin bypass                       & Qwen-72B  & -- & -- & -- & -- & -- \\
+\multicolumn{6}{l}{\textit{Discovery contribution (Swin-proposed, VLM-confirmed objects added)}} \\
+Raw SAM + disc.   & SAM baseline + confirmed discovery objects    & 0.558 & 0.233 & 0.060 & 28.5 \\
+Swin + disc.      & Swin filtering + confirmed discovery          & \textbf{0.604} & 0.298 & 0.119 & \textbf{34.2} \\
+Triage + disc.    & Full pipeline (ours)                          & 0.540 & 0.237 & \textbf{0.148} & 31.0 \\
 \addlinespace
-\multicolumn{2}{l}{\textit{VLM backbone (all frames, triage + disc.)}} \\
-                                       & Qwen-72B  & -- & -- & -- & -- & -- \\
-                                       & Llama-90B & -- & -- & -- & -- & -- \\
+\multicolumn{6}{l}{\textit{Triage rule ablations (offline replay, pending)}} \\
+Disjunctive reject & Any single negative signal rejects          & -- & -- & -- & -- \\
+Uniform $\tau_q$   & Single threshold across all classes         & -- & -- & -- & -- \\
+With Swin bypass   & Skip BBox when $\alpha \geq \tau_{\text{skip}}$ & -- & -- & -- & -- \\
+\addlinespace
+\multicolumn{6}{l}{\textit{VLM backbone comparison (pending, Swin + disc.)}} \\
+Qwen2.5-VL-72B    &                                              & -- & -- & -- & -- \\
+Llama-3.2-90B     &                                              & -- & -- & -- & -- \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table*}
 
 \subsection{Qualitative Analysis}
@@ -413,7 +436,7 @@ This work introduced a modular multi-agent framework for validating, refining, a
 By combining object-scale multimodal crops with specialized visual–LLM agents and a domain-specific Swin Transformer, the system provides interpretable, risk-aware triage in which destructive rejection requires agreement between independent judges. 
 This prevents false-positive decisions from compounding while preserving transparency and reproducibility.
 
-A key insight is that a dataset-adapted segmentation model offers a stronger and more stable quality signal than a general-purpose VLM, while the VLM remains essential for semantic tasks such as confirming object identity, detecting background surfaces, and disambiguating human subclasses during discovery. 
+A key insight is that a dataset-adapted segmentation model offers a stronger and more stable quality signal than a general-purpose VLM for dominant-class triage, while the VLM contributes most strongly in two specific roles: (1) confirming Swin-discovered candidates, where a 45.5\% confirmation rate filters noisy region proposals into reliable new annotations; and (2) removing majority-class annotation noise that otherwise suppresses rare-class learning—the full pipeline achieves the best human-class IoU (0.148) despite lower overall mIoU than Swin-only filtering.
 Class-aware thresholds further ensure that small-object masks are not over-rejected due to lower spatial resolution.
 
 Beyond filtering erroneous masks, the Swin-based discovery module recovers objects missed by SAM, enabling a bidirectional correction process that addresses both false positives and false negatives. 

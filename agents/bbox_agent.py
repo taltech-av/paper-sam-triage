@@ -35,11 +35,17 @@ class BBoxAgent(BaseAgent):
         )
         return (
             "This is a zoomed crop from an autonomous driving camera.\n"
-            f"What does it mainly show? Choose one: {options}\n"
-            "Note: traffic lights and traffic signals count as TRAFFIC_LIGHT.\n"
+            "The object of interest may be small, distant, or partially occluded — "
+            "it does not need to fill the frame.\n"
+            f"What class does the masked object belong to? Choose one: {options}\n"
+            "Note: traffic lights, traffic signals, illuminated road signs, variable "
+            "message boards, and any pole-mounted road lighting equipment count as TRAFFIC_LIGHT.\n"
             "Note: trees, bushes, shrubs, hedges, or roadside vegetation count as VEGETATION.\n"
-            "If the crop is blurry, dark, featureless, or shows no distinct "
-            "object, reply UNCLEAR.\n"
+            "Note: CYCLIST includes any person on a bicycle, electric scooter, motorcycle, "
+            "moped, or cargo bike. PEDESTRIAN includes any person walking, running, standing, "
+            "or pushing a pram, stroller, baby wagon, or wheelchair.\n"
+            "If the masked region covers only background with no identifiable object, "
+            "reply UNCLEAR.\n"
             "Reply with exactly one word from the list."
         )
 
@@ -47,8 +53,8 @@ class BBoxAgent(BaseAgent):
         lower = raw.lower()
         tokens = CLASSES + STRONG_DISTRACTORS + WEAK_DISTRACTORS
         found = {t for t in tokens if re.search(rf"\b{t}s?\b", lower)}
-        if not found:
-            return None  # unparseable → retry, then SAFE_DEFAULT
+        if not found or "unclear" in found:
+            return None  # unparseable or ambiguous → retry, then SAFE_DEFAULT
         if self._expected_class in found:
             return "valid"
         # traffic_light is a valid instance of the "sign" class in ZOD

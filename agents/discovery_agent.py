@@ -1,11 +1,11 @@
 """
-Discovery agent: finds objects Swin detects but SAM annotation missed.
+Discovery agent: recovers objects Swin detects that SAM annotation missed.
 
-Compares Swin's per-pixel class map against annotation_sam. Pixels predicted
-as a non-background class but currently annotated as background are candidate
-missed objects. Connected-component analysis and size filtering produce crops
-that a VLM then confirms and (for "human" class) disambiguates into cyclist
-or pedestrian.
+Swin proposes candidates: pixels predicted as non-background but annotated as
+background in annotation_sam. Connected-component analysis and size filtering
+produce crops. A VLM then confirms each crop (yes/no) and disambiguates the
+"human" class into cyclist or pedestrian. Swin drives detection; VLM is the
+confirmation gate only.
 """
 
 from dataclasses import dataclass
@@ -33,12 +33,17 @@ _CONFIRM_PROMPTS = {
     ),
     2: (
         "You are looking at a crop from a front-facing camera on an autonomous vehicle.\n"
-        "Does this crop mainly show a traffic sign, road sign, or information sign?\n"
+        "The object of interest may be small or distant and does not need to fill the frame.\n"
+        "Does this crop contain a traffic sign, road sign, information sign, variable message "
+        "board, or pole-mounted road lighting equipment (traffic lights, street lights)?\n"
         "Answer with exactly one word: sign or other."
     ),
     3: (
         "You are looking at a crop from a front-facing camera on an autonomous vehicle.\n"
-        "Does this crop show a person on a bicycle (cyclist) or a person walking (pedestrian), or neither?\n"
+        "Cyclist means any person on a bicycle, electric scooter, motorcycle, moped, or cargo bike.\n"
+        "Pedestrian means any person walking, running, standing, or pushing a pram, stroller, "
+        "baby wagon, or wheelchair.\n"
+        "Does this crop show a cyclist, a pedestrian, or neither?\n"
         "Answer with exactly one word: cyclist, pedestrian, or other."
     ),
 }

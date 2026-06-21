@@ -84,12 +84,24 @@ def _triage_with_bypass(mask: dict, swin_q: float, **_) -> str:
     return triage(bbox_out, quality_out, None, ag.get("correction"), ag.get("consistency")).decision
 
 
+def _triage_swin_protected(mask: dict, swin_q: float, **_) -> str:
+    """Full triage with Swin protection: bbox=invalid+lidar=pass only counts as
+    two negatives when Swin quality also disagrees. Reduces VLM over-rejection
+    of small/thin objects (signs) where pixel-level Swin agreement is high."""
+    ag = mask["agents"]
+    scores = mask.get("scores", {})
+    swin = scores.get("swin_agreement")
+    quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
+    return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
+
+
 VARIANTS = {
-    "raw_sam":      (_triage_raw_sam,      "No triage — original SAM annotation unchanged (baseline)"),
-    "swin_only":    (_triage_swin_only,    "Swin agreement threshold only — no VLM"),
-    "vlm_only":     (_triage_vlm_only,     "BBox VLM + consistency — Swin quality ignored"),
-    "triage":       (_triage_full,         "Swin + VLM + consistency triage, no discovery (paper config D)"),
-    "with_bypass":  (_triage_with_bypass,  "Simulate bypass: skip VLM for masks where swin_bypass=True"),
+    "raw_sam":         (_triage_raw_sam,         "No triage — original SAM annotation unchanged (baseline)"),
+    "swin_only":       (_triage_swin_only,       "Swin agreement threshold only — no VLM"),
+    "vlm_only":        (_triage_vlm_only,        "BBox VLM + consistency — Swin quality ignored"),
+    "triage":          (_triage_full,            "Swin + VLM + consistency triage, no discovery"),
+    "swin_protected":  (_triage_swin_protected,  "Full triage + Swin protects valid masks from VLM false negatives"),
+    "with_bypass":     (_triage_with_bypass,     "Simulate bypass: skip VLM for masks where swin_bypass=True"),
 }
 
 
