@@ -134,6 +134,7 @@ python process_frames.py --mock --limit 10
 **Full run:**
 ```bash
 python process_frames.py --model qwen2.5vl:72b --resume
+python process_frames.py --model llama3.2-vision:90b --resume
 ```
 
 **Fall back to VLM quality agent (no Swin):**
@@ -154,8 +155,8 @@ python replay_triage.py --list-variants
 
 **Merge two VLM runs into a consensus annotation:**
 ```bash
-python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llama3.2_90b
-python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llama3.2_90b --rule union
+python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llama3.2-vision_90b
+python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llama3.2-vision_90b --rule union
 ```
 
 **All `process_frames.py` options:**
