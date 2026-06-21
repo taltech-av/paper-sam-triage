@@ -155,8 +155,8 @@ python replay_triage.py --list-variants
 
 **Merge two VLM runs into a consensus annotation:**
 ```bash
-python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llama3.2-vision_90b
-python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llama3.2-vision_90b --rule union
+python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llava_34b
+python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llava_34b --rule union
 ```
 
 **All `process_frames.py` options:**

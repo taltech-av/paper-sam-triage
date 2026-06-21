@@ -11,7 +11,7 @@
 #SBATCH --error=/gpfs/mariana/smbhome/totahv/paper-vlm-annotation-pipeline/logs/pipeline_%j.log
 
 PIPELINE_DIR="/gpfs/mariana/smbhome/totahv/paper-vlm-annotation-pipeline"
-MODEL="llama3.2-vision:90b"
+MODEL="llava:34b"
 
 export PATH="$HOME/bin:$PATH"
 export OLLAMA_HOST="0.0.0.0:11435"
@@ -37,7 +37,7 @@ echo "[$(date)] Ollama ready."
 
 # ── Pull model if not already local ──────────────────────────────────────────
 if ! ollama list | grep -q "$MODEL"; then
-    echo "[$(date)] Pulling $MODEL (~45 GB)..."
+    echo "[$(date)] Pulling $MODEL (~20 GB)..."
     ollama pull "$MODEL"
 fi
 
@@ -45,9 +45,6 @@ echo "[$(date)] Warming up $MODEL..."
 ollama run "$MODEL" <<< "warmup"
 
 # ── Run pipeline ──────────────────────────────────────────────────────────────
-# Quality agent: Swin segmentation model (default). Pass --no-swin to use VLM instead.
-# Workers: 4 (set by --hpc via config.WORKERS).
-# Discovery: add --discovery to enable missed-object recovery (extra VLM calls per frame).
 echo "[$(date)] Starting pipeline..."
 cd "$PIPELINE_DIR"
 python process_frames.py --model "$MODEL" --resume --hpc
