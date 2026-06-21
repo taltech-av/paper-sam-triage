@@ -1,0 +1,25 @@
+\begin{table*}[b]
+\centering
+\caption{Downstream CLFTv2 segmentation: full comparison (pending). Rows marked~-- await LLaVA-34B inference, consensus runs, iSEAuto cross-dataset run, and full-dataset annotation.}
+\label{tab:downstream}
+\begin{tabular}{llllcccc}
+\toprule
+\textbf{Dataset} & \textbf{Training data} & \textbf{VLM} & \textbf{Frames} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
+\midrule
+\multicolumn{8}{l}{\textit{ZOD — annotation variant comparison}} \\
+ZOD & Clean only (manual labels)              & --          & 2{,}319 & -- & -- & -- & -- \\
+ZOD & Clean + flagged, raw SAM                & --          & 6{,}454 & -- & -- & -- & -- \\
+ZOD & Flagged only, Swin + disc.              & Qwen-72B    & 4{,}135 & -- & -- & -- & -- \\
+ZOD & Flagged only, triage + disc.            & Qwen-72B    & 4{,}135 & -- & -- & -- & -- \\
+ZOD & Flagged only, triage + disc.            & LLaVA-34B   & 4{,}135 & -- & -- & -- & -- \\
+ZOD & Clean + flagged, triage + disc.         & Qwen-72B    & 6{,}454 & -- & -- & -- & -- \\
+ZOD & Clean + flagged, triage (consensus)     & Both        & 6{,}454 & -- & -- & -- & -- \\
+\addlinespace
+\multicolumn{8}{l}{\textit{iSEAuto — cross-dataset generalization (pending)}} \\
+iSEAuto & Raw SAM                             & --          & --      & -- & -- & -- & -- \\
+iSEAuto & Triage + disc.                      & Qwen-72B    & --      & -- & -- & -- & -- \\
+iSEAuto & Triage + disc.                      & LLaVA-34B   & --      & -- & -- & -- & -- \\
+iSEAuto & Triage (consensus)                  & Both        & --      & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table*}

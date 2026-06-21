@@ -134,7 +134,7 @@ python process_frames.py --mock --limit 10
 **Full run:**
 ```bash
 python process_frames.py --model qwen2.5vl:72b --resume
-python process_frames.py --model llama3.2-vision:90b --resume
+python process_frames.py --model llava:34b --resume
 ```
 
 **Fall back to VLM quality agent (no Swin):**
@@ -202,7 +202,7 @@ rsync -avP --exclude='venv/' --exclude='logs/' --exclude='runs/' --exclude='__py
 |---|---|---|
 | `qwen2.5vl:7b` | ~5 GB | local dev |
 | `qwen2.5vl:72b` | ~40 GB | HPC run A |
-| `llama3.2-vision:90b` | ~55 GB | HPC run B |
+| `llava:34b` | ~20 GB | HPC run B |
 
 `OLLAMA_NUM_PARALLEL=2` in the SLURM script allows two concurrent requests on the
 80 GB A100 while keeping both VLM copies in VRAM.

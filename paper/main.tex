@@ -28,7 +28,7 @@
 }
 \makeatother
 
-\title{Concordance-Based Pseudo-Label Triage via Domain Segmentation and Visual–Language Models for Autonomous Driving}
+\title{Concordance-Based Pseudo-Label Triage via Domain-Adapted Segmentation and Vision–Language Models for Autonomous Driving}
 
 \author{\small Toomas Tahves$^{1}$, Mauro Bellone$^{2,5}$, Raivo Sell$^{1}$ \\ 
 $^{1}$\textit{Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia} \\ 
@@ -41,13 +41,17 @@ $^{5}$\textit{Department of Computer Science and Engineering, Universitas Mercat
 \maketitle
 
 \begin{abstract}
-Dense pixel-level annotations remain a major bottleneck in training multi-modal perception models for autonomous driving. 
-While the Segment Anything Model (SAM) can generate large volumes of pseudo-labels, its masks frequently drift at boundaries, miss small objects, or introduce spurious segments. 
-We propose a multi-agent refinement framework that combines visual–language reasoning with a domain-specific Swin Transformer to validate SAM masks, suppress hallucinations, and recover objects that SAM fails to detect. 
-The system uses class-aware agreement thresholds to handle the low mIoU of small traffic participants; a high-confidence bypass threshold is defined and its accuracy–efficiency trade-off studied offline through ablation.
-A complementary discovery module identifies regions where Swin predicts objects over SAM background and confirms them with a VLM, enabling automatic recovery of missed instances. 
-The refined and augmented masks are used to supervise a CLFTv2 camera–LiDAR fusion model, allowing us to study how improved pseudo-label quality affects downstream segmentation. 
-This work demonstrates that combining structured multi-agent reasoning with dataset-adapted quality estimation provides a practical path toward scalable annotation refinement without additional manual labeling.
+Dense pixel-level annotations remain a critical bottleneck for autonomous driving perception, yet the cost of manual labeling limits the scale at which high-quality supervision can be obtained.
+Foundation models such as the Segment Anything Model (SAM) enable large-scale pseudo-labeling, but their masks frequently exhibit boundary drift, spurious regions, and missed objects—errors that are especially severe for safety-critical classes such as cyclists and pedestrians.
+
+We present a multi-agent concordance triage framework that validates and augments SAM-generated semantic segmentation masks using two complementary signals: a domain-adapted Swin Transformer that scores each mask by its per-pixel class agreement ratio, and a vision–language model (VLM) that performs object-presence verification on tight, object-scale crops.
+Rejection requires at least two independent signals to concur, preventing any single erroneous judgment from silently removing valid annotations.
+Class-aware quality thresholds compensate for the Swin model's lower recall on rare traffic participants.
+A discovery module identifies objects SAM missed by comparing the Swin class map to SAM background labels and confirming candidates with a VLM, enabling bidirectional correction of both false positives and false negatives.
+
+We evaluate on the Zenseact Open Dataset and iSEAuto using two open-weight VLMs, and study downstream effects by training a CLFTv2 camera--LiDAR fusion model on all annotation variants.
+Results show that domain-adapted segmentation filtering is the primary driver of overall mIoU gains, while VLM triage uniquely recovers rare-class performance that pixel-level filtering alone cannot achieve.
+All decisions are traceable to explicit agent outputs with no learned fusion weights, enabling full reproducibility and offline ablation without re-running inference.
 \end{abstract}
 
 
@@ -60,27 +64,28 @@ autonomous driving, semantic segmentation, pseudo-label refinement, multi-agent 
 
 \section{Introduction}
 
-High-quality pixel-level annotations remain a major bottleneck for training reliable perception models in autonomous driving. 
-Modern camera--LiDAR datasets contain millions of frames, yet only a small fraction can be densely labeled because each mask must be checked for geometric plausibility, occlusion handling, and cross-sensor consistency. 
-Foundation models such as the Segment Anything Model (SAM) \cite{kirillov2023sam} reduce the cost of generating pseudo-labels, but their masks often drift at boundaries, hallucinate objects, or miss small traffic participants, limiting their usefulness without additional validation.
+High-quality pixel-level annotations are a prerequisite for training reliable perception models in autonomous driving, yet the cost of manual labeling limits the scale at which supervision can be obtained.
+Foundation models such as the Segment Anything Model (SAM) \cite{kirillov2023sam} have made large-scale pseudo-labeling feasible, but their masks frequently drift at object boundaries, hallucinate regions with no physical correlate, or miss small traffic participants entirely.
+These errors are not random noise: they cluster around the safety-critical classes—cyclists, pedestrians, and signs—that are most consequential for downstream planning, and they propagate directly into trained models when pseudo-labels are used as supervision without additional validation.
 
-Classical segmentation models \cite{long2015fcn,ronneberger2015unet,zhao2017psp,chen2018deeplab} and multi-modal fusion approaches \cite{valada2019selfsupervised,jaritz2019multimodal} still depend on accurate labels, while semi-automatic pipelines based on geometric priors or thresholding \cite{zou2019confidence,lee2013pseudo,jaritz2020xmuda} struggle with subtle errors and provide limited interpretability. 
-Recent visual–language models (VLMs) \cite{liu2023llava,alayrac2022flamingo,wang2023voyager,wu2023llmjudge} offer richer semantic priors and structured reasoning, suggesting a more flexible alternative to hand-crafted filters.
+Existing filtering strategies offer limited remedies.
+Confidence thresholding and geometric priors \cite{zou2019confidence,lee2013pseudo,jaritz2020xmuda} remove only the most extreme outliers and cannot distinguish a well-shaped mask on the wrong object from a correctly placed mask with a rough boundary.
+Semi-supervised consistency constraints \cite{jaritz2020xmuda} improve efficiency but depend on fixed heuristics that lack interpretability and do not generalise across sensor configurations.
+Vision–language models (VLMs) \cite{liu2024llava,wang2024qwen2vl} offer richer semantic priors and can perform object-level reasoning, but their application to SAM mask triage—particularly over camera–LiDAR multimodal inputs and small per-mask crops—has not been explored.
 
-We propose a multi-agent annotation system that combines visual–language reasoning with a domain-specific Swin Transformer \cite{liu2021swin} to validate and refine SAM-generated masks. 
-The system decomposes mask assessment into specialized agents for object verification, quality estimation, error characterization, and correction, complemented by a deterministic LiDAR consistency check. 
-Because destructive decisions amplify false positives in pseudo-labeling pipelines, the triage logic is risk-aware: a mask is removed only when multiple independent signals agree. 
-Object-scale multimodal crops ensure reliable VLM judgments, especially for small traffic participants.
+We address this gap with a multi-agent concordance triage system that combines two complementary signals: a domain-adapted Swin Transformer \cite{liu2021swin} trained on clean frames to assess per-pixel class agreement, and a VLM that verifies object presence on tight, object-scale crops.
+The key design principle is that rejection is destructive and irreversible, so a mask is discarded only when at least two independent signals concur—preventing any single erroneous judge from silently removing valid annotations.
+Class-aware thresholds compensate for the Swin model's lower recall on small traffic participants.
+A complementary discovery module recovers objects SAM missed by finding regions where the Swin class map disagrees with SAM background labels and confirming candidates with a VLM, achieving bidirectional correction of both false positives and false negatives.
 
-Beyond filtering erroneous masks, the system introduces a Swin-based discovery module that identifies objects missed by SAM and confirms them with a VLM, enabling recovery of false negatives. 
-The refined and augmented labels supervise CLFTv2 (in preparation, extending~\cite{gu2024clft}), a camera–LiDAR fusion model, allowing us to study how improved pseudo-label quality influences downstream segmentation.
+We evaluate on the Zenseact Open Dataset (ZOD) \cite{alibeigi2023zod} and iSEAuto using two open-weight VLMs, and measure downstream impact by training a CLFTv2 \cite{gu2024clft} camera–LiDAR fusion model on all annotation variants.
 
 Our contributions are:
 \begin{itemize}
-    \item a risk-aware multi-agent framework for validating SAM masks using structured multimodal metadata,
-    \item a domain-specific Swin quality judge with class-aware thresholds for small-object reliability,
-    \item a VLM-assisted discovery mechanism for recovering missed objects,
-    \item and an evaluation on ZOD \cite{alibeigi2023zod} measuring annotation quality and downstream segmentation effects.
+    \item a concordance-based multi-agent triage framework that combines domain-adapted segmentation and VLM signals with a risk-aware rejection rule,
+    \item a domain-adapted Swin quality judge with class-aware thresholds that compensates for low segmentation recall on rare traffic participants,
+    \item a VLM-confirmed discovery module that recovers objects missed by SAM, enabling bidirectional pseudo-label correction,
+    \item and a systematic evaluation on two datasets measuring annotation quality, downstream segmentation performance across five annotation variants, and cross-dataset generalization.
 \end{itemize}
 
 
@@ -90,24 +95,33 @@ Our contributions are:
 \section{Related Work}
 \label{sec:related_work}
 
-\subsection{Semantic Segmentation and Annotation in Autonomous Driving}
+\subsection{Semantic Segmentation and Pseudo-Labeling in Autonomous Driving}
 
-Semantic segmentation is central to autonomous-driving perception, providing dense scene understanding for planning and safety-critical decision-making. 
-Classical camera-based models such as FCN, U-Net, PSPNet, and DeepLab \cite{long2015fcn,ronneberger2015unet,zhao2017psp,chen2018deeplab} established strong baselines, while later work incorporated LiDAR through early-, late-, and feature-level fusion \cite{valada2019selfsupervised,jaritz2019multimodal}. 
-Despite these advances, large-scale datasets still require extensive pixel-level annotation, which remains slow and costly.
+Semantic segmentation underpins scene understanding in autonomous driving, with camera-based architectures such as FCN, PSPNet, and DeepLab \cite{long2015fcn,zhao2017psp,chen2018deeplab} establishing dense prediction baselines and later work extending these to camera--LiDAR fusion through feature-level alignment \cite{valada2019selfsupervised,jaritz2019multimodal}.
+Despite strong performance on established benchmarks, these models depend on pixel-accurate supervision that is expensive to collect at scale.
 
-To reduce labeling effort, prior work explored weak supervision, pseudo-labeling, and geometric priors \cite{zou2019confidence,lee2013pseudo,jaritz2020xmuda}. 
-Projection-based consistency checks further leverage LiDAR geometry to validate or refine image-space labels \cite{behley2019semantickitti,caesar2020nuscenes}. 
-These approaches improve efficiency but rely on fixed heuristics that struggle with subtle boundary errors, small-object failures, and long-tail classes common in driving scenes.
+Pseudo-labeling and self-training methods \cite{lee2013pseudo,zou2019confidence} reduce labeling cost by using model predictions as supervision, while cross-modal consistency constraints \cite{jaritz2020xmuda} and LiDAR-projection checks \cite{behley2019semantickitti,caesar2020nuscenes} leverage geometric redundancy to filter erroneous labels.
+These approaches improve annotation efficiency but rely on fixed thresholds and cannot detect semantic errors—a mask with geometrically plausible shape but misassigned class label passes all geometric checks and corrupts training.
+Long-tail classes such as cyclists and pedestrians, which are underrepresented in both labels and model predictions, are particularly susceptible to this failure mode.
+
+\subsection{Foundation Models for Scalable Annotation}
+
+The Segment Anything Model (SAM) \cite{kirillov2023sam} has fundamentally changed the economics of mask generation: class-agnostic proposals can be produced for every object in a scene without per-class prompts or labeled training data.
+This has motivated large-scale pseudo-annotation pipelines for autonomous driving, where SAM proposals are matched to semantic categories via overlaid sensor data or downstream classifiers.
+However, SAM's class-agnostic design means it cannot verify the semantic correctness of its own output.
+Boundary drift occurs where object edges are ambiguous in RGB alone; hallucinated regions arise in texturally uniform areas such as sky and vegetation; and small objects are frequently missed when their image footprint falls below SAM's effective resolution.
+Post-hoc semantic validation of SAM proposals is therefore a necessary complement to any SAM-based annotation pipeline, and it is precisely what our system provides.
 
 \subsection{Vision–Language Models and Multi-Agent Reasoning}
 
-Recent vision–language models (VLMs) combine image encoders with language-based reasoning, enabling structured interpretation of visual scenes \cite{liu2024llava,ye2023mplug,wang2024qwen2vl}. 
-VLMs have been used to assess label quality, detect inconsistencies, and guide refinement steps \cite{wu2023llmjudge,li2023llmdata}, acting not as segmentation models but as semantic judges over existing predictions.
+Vision–language models (VLMs) combine image encoders with autoregressive language decoders, enabling structured reasoning over visual content \cite{liu2024llava,ye2023mplug,wang2024qwen2vl}.
+The LLM-as-judge paradigm \cite{zheng2023judging} has established that language models can reliably evaluate the quality of other models' outputs when given structured prompts and constrained output formats, providing a scalable alternative to human review for certain quality-assessment tasks.
+In the annotation context, this suggests VLMs can serve as semantic judges over mask proposals—verifying object identity and flagging implausible regions—without requiring fine-tuning on task-specific labels.
 
-Multi-agent LLM frameworks extend this idea by decomposing complex tasks into specialized agents that collaborate through structured messages \cite{du2023improving,wang2023voyager}. 
-Such systems have been applied to planning, tool use, and quality assessment, demonstrating improved transparency and robustness over monolithic decision modules. 
-However, their use in autonomous-driving annotation remains limited, and prior work has not explored multi-agent reasoning over camera--LiDAR metadata for validating and refining SAM-generated masks.
+Multi-agent frameworks extend single-model reasoning by distributing subtasks across specialized agents that exchange structured messages \cite{du2023improving,wang2023voyager}.
+Requiring concordance between independent agents before taking a destructive action is a key reliability mechanism: if agents disagree, the case is escalated rather than resolved by majority vote, preserving auditability.
+This principle directly motivates our triage rule: rejection, the most consequential decision, requires at least two independent negative signals.
+Prior work has not applied multi-agent concordance to SAM mask validation over camera--LiDAR multimodal inputs, nor studied how the complementary strengths of pixel-level segmentation and semantic VLM reasoning interact in a single annotation pipeline.
 
 
 
@@ -207,28 +221,11 @@ Table~\ref{tab:dataset} summarizes the dataset.
 Flagged frames contain more proposals per frame, consistent with crowded scenes being harder for SAM and more likely to fail inspection. 
 This partition provides large-scale weak supervision for evaluating triage behavior, while a stratified subset of proposals is labeled at mask level for agent-level evaluation.
 
-\begin{table}[h]
-\centering
-\caption{Dataset composition.}
-\label{tab:dataset}
-\begin{tabular}{lrrr}
-\toprule
- & \textbf{Clean} & \textbf{Flagged} & \textbf{Total} \\
-\midrule
-Frames           & 2{,}319  & 4{,}135  & 6{,}454   \\
-Vehicle masks    & 9{,}923  & 25{,}626 & 35{,}549  \\
-Sign masks       & 19{,}056 & 46{,}066 & 65{,}122  \\
-Cyclist masks    & 3{,}216  & 8{,}288  & 11{,}504  \\
-Pedestrian masks & 3{,}864  & 10{,}781 & 14{,}645  \\
-Total masks      & 36{,}059 & 90{,}761 & 126{,}820 \\
-Masks per frame  & 15.5     & 21.9     & 19.7      \\
-\bottomrule
-\end{tabular}
-\end{table}
+\input{tables/dataset}
 
 \paragraph{VLM Configuration}
-We evaluate two open-weight VLMs served via Ollama on a single A100 GPU: Qwen2.5-VL-72B \cite{bai2025qwen25vl} and Llama-3.2-Vision-90B \cite{meta2024llama32}. 
-The Swin Quality Agent runs once per frame and is shared across both models; only the BBox, Correction, and Failure-Mode agents differ. 
+We evaluate two open-weight VLMs served via Ollama on a single A100 GPU: Qwen2.5-VL-72B \cite{bai2025qwen25vl} and LLaVA-1.6-34B \cite{liu2024llava}.
+The Swin Quality Agent runs once per frame and is shared across both models; only the BBox, Correction, and Failure-Mode agents differ.
 All triage-rule ablations are performed offline using stored agent outputs.
 
 \subsection{Agent-Level Evaluation}
@@ -237,46 +234,14 @@ Each agent is evaluated independently against expert mask-level labels.
 For binary judges (BBox, Swin quality, correction, consistency), we report accuracy, precision, recall, and F1. 
 For the failure-mode agent, we report macro-F1 across four error categories.
 
-\begin{table}[t]
-\centering
-\caption{Judge-level performance (placeholders).}
-\label{tab:agent_performance}
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{lcccc}
-\toprule
-\textbf{Judge} & \textbf{Acc.} & \textbf{Prec.} & \textbf{Rec.} & \textbf{F1} \\
-\midrule
-BBox validity (VLM)                  & -- & -- & -- & -- \\
-Mask quality -- Swin (ours)          & -- & -- & -- & -- \\
-Mask quality -- VLM baseline         & -- & -- & -- & -- \\
-Consistency (LiDAR, det.)            & -- & -- & -- & -- \\
-Correction proposal                  & -- & -- & -- & -- \\
-Failure-mode classifier (macro-F1)   & \multicolumn{4}{c}{--} \\
-\bottomrule
-\end{tabular}}
-\end{table}
+\input{tables/agent_performance}
 
 \subsection{Triage Decision Evaluation}
 
 We compare system triage outputs (\texttt{accept}, \texttt{refine}, \texttt{reject}, \texttt{review}) to expert triage labels. 
 Table~\ref{tab:triage_confusion} shows the confusion matrix; macro-averaged precision, recall, and F1 are also reported.
 
-\begin{table}[t]
-\centering
-\caption{Confusion matrix for final triage decisions (placeholders).}
-\label{tab:triage_confusion}
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{lcccc}
-\toprule
- & \textbf{Accept} & \textbf{Refine} & \textbf{Reject} & \textbf{Review} \\
-\midrule
-Accept (GT) & -- & -- & -- & -- \\
-Refine (GT) & -- & -- & -- & -- \\
-Reject (GT) & -- & -- & -- & -- \\
-Review (GT) & -- & -- & -- & -- \\
-\bottomrule
-\end{tabular}}
-\end{table}
+\input{tables/triage_confusion}
 
 
 
@@ -304,42 +269,22 @@ s(\mathcal{F}) = \frac{\sum_{m \in \mathcal{F}} |m| \cdot \mathbb{1}[\,\text{tri
 and classify frames as flagged when $s(\mathcal{F}) > \theta$. 
 Sweeping $\theta$ yields a ROC curve; Table~\ref{tab:frame_classification} reports AUC and operating-point metrics.
 
-\begin{table}[h]
-\centering
-\caption{Triage distribution by partition (placeholders).}
-\label{tab:partition_triage}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Decision} & \textbf{Clean (\%)} & \textbf{Flagged (\%)} \\
-\midrule
-Accept       & -- & -- \\
-Refine       & -- & -- \\
-Reject       & -- & -- \\
-Human review & -- & -- \\
-\bottomrule
-\end{tabular}
-\end{table}
+\input{tables/partition_triage}
 
-\begin{table}[t]
-\centering
-\caption{Frame-level classification from rejection score (placeholders).}
-\label{tab:frame_classification}
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{lccccc}
-\toprule
- & \textbf{AUC} & \textbf{Acc.} & \textbf{Prec.} & \textbf{Rec.} & \textbf{F1} \\
-\midrule
-Qwen2.5-VL-72B          & -- & -- & -- & -- & -- \\
-Llama-3.2-Vision-90B    & -- & -- & -- & -- & -- \\
-\bottomrule
-\end{tabular}}
-\end{table}
+\input{tables/frame_classification}
+
+\subsection{False-Positive Rate on Clean Frames}
+
+To verify that the triage system does not aggressively reject valid annotations, we run inference on the 2{,}319 clean frames and report decision distributions.
+A well-calibrated triage system should accept the large majority of masks on frames that passed manual inspection.
+
+\input{tables/clean_fpr}
 
 \subsection{Downstream Segmentation}
 
 We train CLFTv2 on seven annotation variants derived from a 1{,}000-frame Qwen2.5-VL-72B inference run on the ZOD validation subset.
 Rejected pixels are mapped to \texttt{ignore}.
-The full downstream comparison—including clean-frame baselines, Llama-3.2-90B, consensus voting, and the complete 6{,}454-frame dataset—is reserved for future experiments (Table~\ref{tab:downstream}).
+The full downstream comparison—including clean-frame baselines, LLaVA-34B, consensus voting, and the complete 6{,}454-frame dataset—is reserved for future experiments (Table~\ref{tab:downstream}).
 
 Table~\ref{tab:ablation} reports vehicle, sign, and combined human-class IoU (cyclist + pedestrian) for all seven variants.
 Three findings stand out.
@@ -360,62 +305,13 @@ This confirms that VLM semantic reasoning adds unique value for rare-class recov
 
 The best-performing single annotation set is \textbf{Swin + discovery} (34.2 mIoU), suggesting the primary contribution of the VLM in our pipeline is confirmation of discovery candidates rather than triage rejection.
 
-\begin{table*}[b]
-\centering
-\caption{Downstream CLFTv2 segmentation: full comparison (pending). Rows marked~-- await Llama-3.2-90B inference, consensus runs, and full-dataset annotation.}
-\label{tab:downstream}
-\begin{tabular}{llcccc}
-\toprule
-\textbf{Training data} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
-\midrule
-Clean only (ZOD labels)                  & --        & -- & -- & -- & -- \\
-Clean + flagged, raw SAM                 & --        & -- & -- & -- & -- \\
-Flagged only, Swin + disc.               & Qwen-72B  & -- & -- & -- & -- \\
-Flagged only, triage + disc.             & Qwen-72B  & -- & -- & -- & -- \\
-Flagged only, triage + disc.             & Llama-90B & -- & -- & -- & -- \\
-Clean + flagged, triage + disc.          & Qwen-72B  & -- & -- & -- & -- \\
-Clean + flagged, triage (consensus)      & Both      & -- & -- & -- & -- \\
-\bottomrule
-\end{tabular}
-\end{table*}
+\input{tables/downstream}
 
 \subsection{Ablation Studies}
 
 All triage-rule variants are generated offline from stored agent outputs using \texttt{replay\_triage.py}; VLM backbone ablations require separate inference runs.
 
-\begin{table*}[t]
-\centering
-\caption{Annotation variant ablation: CLFTv2-Tiny RGB on 1\,000-frame ZOD subset (Qwen2.5-VL-72B).
-         mIoU averages vehicle, sign, and human (cyclist + pedestrian combined).
-         Best result per column in \textbf{bold}. Rows marked~-- are pending.}
-\label{tab:ablation}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{llcccc}
-\toprule
-\textbf{Variant} & \textbf{Description} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
-\midrule
-\multicolumn{6}{l}{\textit{Triage signal ablations (no discovery)}} \\
-Raw SAM           & No triage; SAM pseudo-labels unchanged       & 0.517 & 0.215 & 0.058 & 26.4 \\
-VLM only          & BBox VLM + consistency; Swin quality ignored  & 0.539 & 0.231 & 0.076 & 28.2 \\
-Triage            & Swin + VLM + consistency                      & 0.539 & 0.245 & 0.079 & 28.8 \\
-Swin only         & Swin agreement threshold; no VLM              & 0.584 & \textbf{0.322} & 0.100 & 33.6 \\
-\addlinespace
-\multicolumn{6}{l}{\textit{Discovery contribution (Swin-proposed, VLM-confirmed objects added)}} \\
-Raw SAM + disc.   & SAM baseline + confirmed discovery objects    & 0.558 & 0.233 & 0.060 & 28.5 \\
-Swin + disc.      & Swin filtering + confirmed discovery          & \textbf{0.604} & 0.298 & 0.119 & \textbf{34.2} \\
-Triage + disc.    & Full pipeline (ours)                          & 0.540 & 0.237 & \textbf{0.148} & 31.0 \\
-\addlinespace
-\multicolumn{6}{l}{\textit{Triage rule ablations (offline replay, pending)}} \\
-Disjunctive reject & Any single negative signal rejects          & -- & -- & -- & -- \\
-Uniform $\tau_q$   & Single threshold across all classes         & -- & -- & -- & -- \\
-With Swin bypass   & Skip BBox when $\alpha \geq \tau_{\text{skip}}$ & -- & -- & -- & -- \\
-\addlinespace
-\multicolumn{6}{l}{\textit{VLM backbone comparison (pending, Swin + disc.)}} \\
-Qwen2.5-VL-72B    &                                              & -- & -- & -- & -- \\
-Llama-3.2-90B     &                                              & -- & -- & -- & -- \\
-\bottomrule
-\end{tabular}}
-\end{table*}
+\input{tables/ablation}
 
 \subsection{Qualitative Analysis}
 
@@ -443,7 +339,8 @@ Beyond filtering erroneous masks, the Swin-based discovery module recovers objec
 The clean/flagged frame partition from our earlier annotation campaign provides large-scale weak supervision and supports downstream experiments in which filtered versions of discarded frames are returned to the training pool.
 
 The architecture is backend-agnostic and supports local deployment, making it suitable for privacy-sensitive workflows. 
-Future work includes evaluation on a second automotive dataset (ISEAuto) to test generalization across sensor configurations, adaptive prompting, multi-agent debate mechanisms, and extensions to panoptic and temporal segmentation. 
+Cross-dataset evaluation on iSEAuto validates generalization across sensor configurations and recording conditions.
+Future work includes adaptive prompting, multi-agent debate mechanisms, and extensions to panoptic and temporal segmentation. 
 Overall, the framework offers a reproducible foundation for scalable annotation quality control in autonomous-driving datasets.
 
 
