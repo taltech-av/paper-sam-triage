@@ -14,7 +14,7 @@ PIPELINE_DIR="/gpfs/mariana/smbhome/totahv/paper-vlm-annotation-pipeline"
 MODEL="qwen2.5vl:72b"
 
 export PATH="$HOME/bin:$PATH"
-export OLLAMA_HOST="0.0.0.0:11434"
+export OLLAMA_HOST="0.0.0.0:11435"
 export OLLAMA_CONTEXT_LENGTH=4096
 export OLLAMA_MODELS="/gpfs/mariana/smbhome/totahv/ollama_models"
 export OLLAMA_NUM_PARALLEL=2
@@ -32,7 +32,7 @@ source "$PIPELINE_DIR/venv/bin/activate"
 echo "[$(date)] Starting Ollama..."
 ollama serve &
 SERVER_PID=$!
-until curl -sf "http://localhost:11434" > /dev/null; do sleep 2; done
+until curl -sf "http://localhost:11435" > /dev/null; do sleep 2; done
 echo "[$(date)] Ollama ready."
 
 # ── Pull model if not already local ──────────────────────────────────────────

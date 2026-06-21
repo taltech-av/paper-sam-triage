@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 # --- Data paths ---
@@ -91,7 +92,8 @@ CLASS_COLORS_BGR = {
 }
 
 # --- VLM backend ---
-OLLAMA_URL = "http://localhost:11434"
+_ollama_host = os.environ.get("OLLAMA_HOST", "localhost:11434")
+OLLAMA_URL = _ollama_host if _ollama_host.startswith("http") else f"http://{_ollama_host}"
 OLLAMA_MODEL = "qwen2.5vl:7b"
 VLM_TIMEOUT = 120          # seconds per call (local 7B; use_hpc() raises to 120 for 72B/90B)
 VLM_MAX_RETRIES = 1
