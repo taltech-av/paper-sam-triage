@@ -1,0 +1,22 @@
+\begin{table}[t]
+\centering
+\caption{iSEAuto convergence comparison.
+         All runs train CLFTv2-Base CrossFusion on iSEAuto for 200 epochs.
+         Scratch initialises from ImageNet weights only.
+         Transfer runs initialise from the corresponding ZOD-trained checkpoint and fine-tune with a reset learning rate.
+         Val mIoU is reported at four checkpoints to show convergence speed independently of final performance.
+         mIoU averages vehicle and human (iSEAuto has no sign class).
+         All values pending final training runs.}
+\label{tab:iseauto_convergence}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Initialisation} & \textbf{ep.\,20} & \textbf{ep.\,50} & \textbf{ep.\,100} & \textbf{ep.\,200} \\
+\midrule
+Scratch (ImageNet)          & -- & -- & -- & -- \\
+ZOD raw SAM                 & -- & -- & -- & -- \\
+ZOD Swin + disc.            & -- & -- & -- & -- \\
+ZOD Triage + disc.          & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}}
+\end{table}

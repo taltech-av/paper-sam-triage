@@ -306,6 +306,18 @@ Table~\ref{tab:modality_ablation} isolates the contribution of each sensor modal
 
 \input{tables/modality_ablation}
 
+\subsection{Cross-Dataset Generalisation}
+
+We evaluate whether annotation quality affects the transferability of learned representations to a new domain.
+CLFTv2-Base CrossFusion is fine-tuned on the iSEAuto dataset~\cite{burnett2019iseauto} starting from four different initialisations: ImageNet weights only (scratch), and ZOD-trained checkpoints from raw SAM, Swin + disc., and the full pipeline.
+All runs train for 200 epochs with a reset learning rate; final performance converges to a similar point in all cases since the model fully adapts to iSEAuto.
+The comparison therefore focuses on \emph{convergence speed}: a checkpoint encoding higher-quality semantic features should reach a given validation mIoU in fewer epochs.
+iSEAuto contains vehicle and human classes only (no sign); mIoU is averaged over those two classes.
+
+Table~\ref{tab:iseauto_convergence} reports validation mIoU at epochs 20, 50, 100, and 200.
+
+\input{tables/iseauto_convergence}
+
 \subsection{Ablation Studies}
 
 All triage-rule variants are generated offline from stored agent outputs using \texttt{replay\_triage.py}; no additional VLM inference is required.
