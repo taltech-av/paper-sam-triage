@@ -223,87 +223,78 @@ This partition provides large-scale weak supervision for evaluating triage behav
 
 \input{tables/dataset}
 
+\input{tables/dataset_distributions}
+
+\paragraph{Train / Validation / Test Splits}
+Both partitions are split independently using the same stratified procedure.
+Frames are grouped into ten strata defined by weather condition (day-fair, day-rain, night-fair, night-rain, snow) crossed with rare-class presence (cyclist or pedestrian pixels $\geq 50$), so every split mirrors the overall weather and class-frequency distribution.
+Within each stratum, 10\,\% of frames are held out for validation and the remainder is allocated between test and training.
+Because night-rain and snow conditions are under-represented in ZOD, we enforce a minimum of 40 frames per weather category in the test set, increasing the effective test ratio for small conditions only.
+Per-weather test subsets are used for all downstream evaluations to isolate weather-specific mIoU.
+Split sizes are summarised in Table~\ref{tab:splits}.
+
+\input{tables/splits}
+
 \paragraph{VLM Configuration}
 We evaluate two open-weight VLMs served via Ollama on a single A100 GPU: Qwen2.5-VL-72B \cite{bai2025qwen25vl} and LLaVA-1.6-34B \cite{liu2024llava}.
 The Swin Quality Agent runs once per frame and is shared across both models; only the BBox, Correction, and Failure-Mode agents differ.
 All triage-rule ablations are performed offline using stored agent outputs.
 
-\subsection{Agent-Level Evaluation}
+\subsection{Triage Calibration}
 
-Each agent is evaluated independently against expert mask-level labels. 
-For binary judges (BBox, Swin quality, correction, consistency), we report accuracy, precision, recall, and F1. 
-For the failure-mode agent, we report macro-F1 across four error categories.
+We evaluate triage behaviour using the clean partition as a proxy ground truth.
+Frames that passed manual inspection carry GT annotations, so masks present in GT represent correctly annotated proposals that a well-calibrated triage system should accept.
+We therefore run the full triage pipeline on the 2{,}319 clean frames and treat per-mask rejection as a false positive.
 
-\input{tables/agent_performance}
+Table~\ref{tab:clean_fpr} reports the decision distribution on clean frames.
+A low rejection rate on clean frames indicates the system does not aggressively discard valid annotations.
+Table~\ref{tab:partition_triage} contrasts decision distributions between the clean and flagged partitions; a well-calibrated system should shift towards higher rejection rates on flagged frames, which contain scenes that failed manual inspection.
 
-\subsection{Triage Decision Evaluation}
+\input{tables/clean_fpr}
 
-We compare system triage outputs (\texttt{accept}, \texttt{refine}, \texttt{reject}, \texttt{review}) to expert triage labels. 
-Table~\ref{tab:triage_confusion} shows the confusion matrix; macro-averaged precision, recall, and F1 are also reported.
+\input{tables/partition_triage}
 
-\input{tables/triage_confusion}
+\subsection{Frame-Level Discrimination}
 
-
-
-\[
-\text{Precision}_{macro} = --,\quad
-\text{Recall}_{macro} = --,\quad
-\text{F1}_{macro} = --.
-\]
-
-
-
-\subsection{Frame-Level Validation}
-
-We evaluate whether triage distinguishes clean from flagged frames and whether it can reproduce manual inspection.
-
-Table~\ref{tab:partition_triage} compares triage decision distributions across partitions. 
-We also aggregate mask-level rejections into a pixel-weighted frame score
-
+Beyond mask-level calibration, we assess whether triage can reproduce coarse manual inspection decisions at the frame level.
+We aggregate per-mask decisions into a pixel-weighted rejection score:
 
 \[
 s(\mathcal{F}) = \frac{\sum_{m \in \mathcal{F}} |m| \cdot \mathbb{1}[\,\text{triage}(m)=\texttt{reject}\,]}{\sum_{m \in \mathcal{F}} |m|},
 \]
 
-
-and classify frames as flagged when $s(\mathcal{F}) > \theta$. 
-Sweeping $\theta$ yields a ROC curve; Table~\ref{tab:frame_classification} reports AUC and operating-point metrics.
-
-\input{tables/partition_triage}
+and classify a frame as flagged when $s(\mathcal{F}) > \theta$.
+Sweeping $\theta$ yields a ROC curve; Table~\ref{tab:frame_classification} reports AUC and the operating-point precision and recall.
+This provides a system-level validation that does not require mask-level expert annotation.
 
 \input{tables/frame_classification}
 
-\subsection{False-Positive Rate on Clean Frames}
-
-To verify that the triage system does not aggressively reject valid annotations, we run inference on the 2{,}319 clean frames and report decision distributions.
-A well-calibrated triage system should accept the large majority of masks on frames that passed manual inspection.
-
-\input{tables/clean_fpr}
-
 \subsection{Downstream Segmentation}
 
-We train CLFTv2 on seven annotation variants derived from a 1{,}000-frame Qwen2.5-VL-72B inference run on the ZOD validation subset.
-Rejected pixels are mapped to \texttt{ignore}.
-The full downstream comparison—including clean-frame baselines, LLaVA-34B, consensus voting, and the complete 6{,}454-frame dataset—is reserved for future experiments (Table~\ref{tab:downstream}).
+We train CLFTv2-Base (RGB--LiDAR fusion) on all seven annotation variants for both VLMs, using the flagged partition (4{,}135 frames, train split from Table~\ref{tab:splits}).
+A clean-frame GT baseline is trained on the clean partition (2{,}319 frames) with ground-truth annotations using the same model.
+Rejected pixels are mapped to \texttt{ignore} in all VLM-annotated variants.
+Evaluation uses the five per-weather test subsets; results are reported as mIoU averaged over vehicle, sign, and human (cyclist + pedestrian combined).
+We additionally include a modality ablation (RGB, LiDAR, Fusion) on the best-performing annotation variant to quantify the contribution of each sensor stream independently of annotation quality.
 
 Table~\ref{tab:ablation} reports vehicle, sign, and combined human-class IoU (cyclist + pedestrian) for all seven variants.
 Three findings stand out.
 
 \textbf{Swin filtering outperforms VLM triage for dominant classes.}
-Swin-only filtering achieves 33.6 mIoU versus 28.8 for the full Swin + VLM triage, a 4.8-point gap driven by sign and vehicle classes.
+Swin-only filtering achieves -- mIoU versus -- for the full Swin + VLM triage, a -- point gap driven by sign and vehicle classes.
 The BBox agent's crop-based classification introduces false rejections on small, thin signs where pixel-level Swin agreement is the more reliable signal.
 
 \textbf{Discovery consistently adds value.}
-Adding Swin-confirmed discovery objects boosts mIoU by 2.1 points over both its base configurations: raw SAM (26.4 $\to$ 28.5) and Swin-only (33.6 $\to$ 34.2).
-The gain is strongest on vehicles (+4.1 points over raw SAM), where Swin-detected candidate regions are large and SAM tends to undersegment.
-Sign IoU drops slightly under Swin + discovery ($-$2.4 points vs.\ Swin-only), consistent with connected-component discovery masks being coarser than SAM proposals for frequently occurring structured objects.
+Adding Swin-confirmed discovery objects boosts mIoU over both its base configurations: raw SAM (-- $\to$ --) and Swin-only (-- $\to$ --).
+The gain is strongest on vehicles, where Swin-detected candidate regions are large and SAM tends to undersegment.
+Sign IoU drops slightly under Swin + discovery versus Swin-only, consistent with connected-component discovery masks being coarser than SAM proposals for frequently occurring structured objects.
 
 \textbf{VLM triage uniquely benefits the rare human class.}
-The full pipeline (triage + discovery) achieves 0.148 human IoU—the highest across all variants and 2.9 points above Swin + discovery (0.119).
-Both configurations add the same 28 human-class discovery objects (21 cyclists, 7 pedestrians); the gap is attributable to VLM triage removing false vehicle and sign masks that otherwise compete for model capacity on the rare human class.
+The full pipeline (triage + discovery) achieves the highest human IoU across all variants, above Swin + discovery.
+The gap is attributable to VLM triage removing false vehicle and sign masks that otherwise compete for model capacity on the rare human class.
 This confirms that VLM semantic reasoning adds unique value for rare-class recovery, while Swin pixel-level agreement is the stronger signal for dominant classes.
 
-The best-performing single annotation set is \textbf{Swin + discovery} (34.2 mIoU), suggesting the primary contribution of the VLM in our pipeline is confirmation of discovery candidates rather than triage rejection.
+The best-performing single annotation set is \textbf{Swin + discovery}, suggesting the primary contribution of the VLM in our pipeline is confirmation of discovery candidates rather than triage rejection.
 
 \input{tables/downstream}
 
@@ -332,14 +323,14 @@ This work introduced a modular multi-agent framework for validating, refining, a
 By combining object-scale multimodal crops with specialized visual–LLM agents and a domain-specific Swin Transformer, the system provides interpretable, risk-aware triage in which destructive rejection requires agreement between independent judges. 
 This prevents false-positive decisions from compounding while preserving transparency and reproducibility.
 
-A key insight is that a dataset-adapted segmentation model offers a stronger and more stable quality signal than a general-purpose VLM for dominant-class triage, while the VLM contributes most strongly in two specific roles: (1) confirming Swin-discovered candidates, where a 45.5\% confirmation rate filters noisy region proposals into reliable new annotations; and (2) removing majority-class annotation noise that otherwise suppresses rare-class learning—the full pipeline achieves the best human-class IoU (0.148) despite lower overall mIoU than Swin-only filtering.
+A key insight is that a dataset-adapted segmentation model offers a stronger and more stable quality signal than a general-purpose VLM for dominant-class triage, while the VLM contributes most strongly in two specific roles: (1) confirming Swin-discovered candidates, filtering noisy region proposals into reliable new annotations; and (2) removing majority-class annotation noise that otherwise suppresses rare-class learning—the full pipeline achieves the best human-class IoU despite lower overall mIoU than Swin-only filtering.
 Class-aware thresholds further ensure that small-object masks are not over-rejected due to lower spatial resolution.
 
 Beyond filtering erroneous masks, the Swin-based discovery module recovers objects missed by SAM, enabling a bidirectional correction process that addresses both false positives and false negatives. 
 The clean/flagged frame partition from our earlier annotation campaign provides large-scale weak supervision and supports downstream experiments in which filtered versions of discarded frames are returned to the training pool.
 
 The architecture is backend-agnostic and supports local deployment, making it suitable for privacy-sensitive workflows. 
-Cross-dataset evaluation on iSEAuto validates generalization across sensor configurations and recording conditions.
+Cross-dataset evaluation on iSEAuto is planned to validate generalization across sensor configurations and recording conditions.
 Future work includes adaptive prompting, multi-agent debate mechanisms, and extensions to panoptic and temporal segmentation. 
 Overall, the framework offers a reproducible foundation for scalable annotation quality control in autonomous-driving datasets.
 

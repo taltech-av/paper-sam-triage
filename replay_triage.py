@@ -39,7 +39,7 @@ from core.triage import TRIAGE_REJECT, triage
 
 # ── Triage variants ───────────────────────────────────────────────────────────
 
-def _triage_raw_sam(mask: dict, **_) -> str:
+def _triage_raw_sam(_: dict, **__) -> str:
     """Accept all masks — original SAM annotation unchanged. Baseline for downstream training."""
     return "accept"
 
@@ -95,13 +95,46 @@ def _triage_swin_protected(mask: dict, swin_q: float, **_) -> str:
     return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
 
 
+def _triage_disjunctive_reject(mask: dict, swin_q: float, **_) -> str:
+    """Ablation: reject if ANY single negative signal is present (instead of requiring ≥2).
+    Shows the cost of the concordance rule — disjunctive rejection is more aggressive
+    and expected to over-reject valid masks, especially for rare classes."""
+    ag = mask["agents"]
+    scores = mask.get("scores", {})
+    swin = scores.get("swin_agreement")
+    quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
+    bbox = ag.get("bbox")
+    if bbox in ("invalid", "background") or quality_out == "bad" or ag.get("consistency") == "fail":
+        return TRIAGE_REJECT
+    return "accept"
+
+
+def _triage_uniform_tau(mask: dict, swin_q: float, **_) -> str:
+    """Ablation: uniform Swin threshold τ_q=0.30 for all classes (no class-aware overrides).
+    Cyclists and pedestrians have per-class τ_q=0.15 in the full pipeline because Swin's
+    recall on small objects is much lower. This variant applies 0.30 uniformly, which
+    over-rejects small-object masks — shows the value of class-aware thresholds."""
+    ag = mask["agents"]
+    scores = mask.get("scores", {})
+    swin = scores.get("swin_agreement")
+    # Apply threshold uniformly; do NOT fall back to stored quality (which has per-class
+    # thresholds baked in from the pipeline run).
+    if swin is not None:
+        quality_out = "good" if swin >= swin_q else "bad"
+    else:
+        quality_out = ag.get("quality")
+    return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
+
+
 VARIANTS = {
-    "raw_sam":         (_triage_raw_sam,         "No triage — original SAM annotation unchanged (baseline)"),
-    "swin_only":       (_triage_swin_only,       "Swin agreement threshold only — no VLM"),
-    "vlm_only":        (_triage_vlm_only,        "BBox VLM + consistency — Swin quality ignored"),
-    "triage":          (_triage_full,            "Swin + VLM + consistency triage, no discovery"),
-    "swin_protected":  (_triage_swin_protected,  "Full triage + Swin protects valid masks from VLM false negatives"),
-    "with_bypass":     (_triage_with_bypass,     "Simulate bypass: skip VLM for masks where swin_bypass=True"),
+    "raw_sam":            (_triage_raw_sam,            "No triage — original SAM annotation unchanged (baseline)"),
+    "swin_only":          (_triage_swin_only,          "Swin agreement threshold only — no VLM"),
+    "vlm_only":           (_triage_vlm_only,           "BBox VLM + consistency — Swin quality ignored"),
+    "triage":             (_triage_full,               "Swin + VLM + consistency triage, no discovery"),
+    "swin_protected":     (_triage_swin_protected,     "Full triage + Swin protects valid masks from VLM false negatives"),
+    "with_bypass":        (_triage_with_bypass,        "Simulate bypass: skip VLM for masks where swin_bypass=True"),
+    "disjunctive_reject": (_triage_disjunctive_reject, "Ablation: any single negative signal rejects (vs. concordance ≥2)"),
+    "uniform_tau":        (_triage_uniform_tau,        "Ablation: uniform τ_q=0.30 for all classes (no class-aware thresholds)"),
 }
 
 

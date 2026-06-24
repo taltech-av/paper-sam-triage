@@ -1,0 +1,19 @@
+\begin{table}[h]
+\centering
+\caption{Train / validation / test split sizes.
+         Test frames are further divided into five per-weather subsets;
+         minimum 40 frames per weather category is enforced in the test set.
+         D = day, N = night.}
+\label{tab:splits}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+ & \multirow{2}{*}{\textbf{Train}} & \multirow{2}{*}{\textbf{Val}} & \multirow{2}{*}{\textbf{Test}} & \multicolumn{5}{c}{\textbf{Test per weather}} \\
+\cmidrule(lr){5-9}
+ & & & & \textbf{D-Fair} & \textbf{D-Rain} & \textbf{N-Fair} & \textbf{N-Rain} & \textbf{Snow} \\
+\midrule
+Clean (2{,}319)   & 1{,}521 & 233 &     565 & 354 &  54 &  65 & 45 & 47 \\
+Flagged (4{,}135) & 2{,}714 & 415 & 1{,}006 & 684 & 115 & 115 & 44 & 48 \\
+\bottomrule
+\end{tabular}}
+\end{table}
