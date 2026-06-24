@@ -1,25 +1,31 @@
-\begin{table*}[b]
+\begin{table*}[t]
 \centering
-\caption{Downstream CLFTv2 segmentation: full comparison (pending). Rows marked~-- await LLaVA-34B inference, consensus runs, iSEAuto cross-dataset run, and full-dataset annotation.}
+\caption{Downstream segmentation summary on CLFTv2-Base CrossFusion.
+         GT baseline uses clean-partition ground-truth annotations (2\,319 frames).
+         VLM variants use the flagged partition (4\,135 frames).
+         iSEAuto rows evaluate cross-dataset generalisation: model trained on ZOD VLM annotations, tested on iSEAuto.
+         mIoU averages vehicle, sign, and human.
+         All values pending final training runs.}
 \label{tab:downstream}
-\begin{tabular}{llllcccc}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llr cccc}
 \toprule
-\textbf{Dataset} & \textbf{Training data} & \textbf{VLM} & \textbf{Frames} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
+\textbf{Training data} & \textbf{VLM} & \textbf{Frames} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
 \midrule
-\multicolumn{8}{l}{\textit{ZOD — annotation variant comparison}} \\
-ZOD & Clean only (manual labels)              & --          & 2{,}319 & -- & -- & -- & -- \\
-ZOD & Clean + flagged, raw SAM                & --          & 6{,}454 & -- & -- & -- & -- \\
-ZOD & Flagged only, Swin + disc.              & Qwen-72B    & 4{,}135 & -- & -- & -- & -- \\
-ZOD & Flagged only, triage + disc.            & Qwen-72B    & 4{,}135 & -- & -- & -- & -- \\
-ZOD & Flagged only, triage + disc.            & LLaVA-34B   & 4{,}135 & -- & -- & -- & -- \\
-ZOD & Clean + flagged, triage + disc.         & Qwen-72B    & 6{,}454 & -- & -- & -- & -- \\
-ZOD & Clean + flagged, triage (consensus)     & Both        & 6{,}454 & -- & -- & -- & -- \\
+\multicolumn{7}{l}{\textit{ZOD — clean partition baseline}} \\
+GT (manual)                      & --             & 2{,}319 & -- & -- & -- & -- \\
 \addlinespace
-\multicolumn{8}{l}{\textit{iSEAuto — cross-dataset generalization (pending)}} \\
-iSEAuto & Raw SAM                             & --          & --      & -- & -- & -- & -- \\
-iSEAuto & Triage + disc.                      & Qwen-72B    & --      & -- & -- & -- & -- \\
-iSEAuto & Triage + disc.                      & LLaVA-34B   & --      & -- & -- & -- & -- \\
-iSEAuto & Triage (consensus)                  & Both        & --      & -- & -- & -- & -- \\
+\multicolumn{7}{l}{\textit{ZOD — annotation variant comparison (flagged partition)}} \\
+Raw SAM (no triage)              & --             & 4{,}135 & -- & -- & -- & -- \\
+Swin + disc.                     & Qwen2.5-VL-72B & 4{,}135 & -- & -- & -- & -- \\
+Swin + disc.                     & LLaVA-1.6-34B  & 4{,}135 & -- & -- & -- & -- \\
+Triage + disc.\ (full pipeline)  & Qwen2.5-VL-72B & 4{,}135 & -- & -- & -- & -- \\
+Triage + disc.\ (full pipeline)  & LLaVA-1.6-34B  & 4{,}135 & -- & -- & -- & -- \\
+\addlinespace
+\multicolumn{7}{l}{\textit{iSEAuto — cross-dataset generalisation}} \\
+GT (manual)                      & --             & --      & -- & -- & -- & -- \\
+Swin + disc.                     & Qwen2.5-VL-72B & --      & -- & -- & -- & -- \\
+Swin + disc.                     & LLaVA-1.6-34B  & --      & -- & -- & -- & -- \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table*}

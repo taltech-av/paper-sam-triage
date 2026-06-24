@@ -1,9 +1,9 @@
 \begin{table*}[t]
 \centering
-\caption{Annotation variant ablation: CLFTv2-Tiny RGB on 1\,000-frame ZOD subset.
+\caption{Annotation variant ablation on CLFTv2-Base (RGB--LiDAR CrossFusion), 4\,135-frame flagged partition.
          mIoU averages vehicle, sign, and human (cyclist + pedestrian combined).
          Bold marks the best result within each model's columns.
-         Rows marked~-- are pending (require offline replay + CLFTv2 training).}
+         All values pending final training runs.}
 \label{tab:ablation}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llcccc cccc}
@@ -13,19 +13,19 @@
 \textbf{Variant} & \textbf{Description} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
 \midrule
 \multicolumn{10}{l}{\textit{Triage signal ablations (no discovery)}} \\
-Raw SAM           & No triage; SAM pseudo-labels unchanged       & 0.517 & 0.215 & 0.058 & 26.4 & 0.509 & 0.217 & 0.065 & 26.4 \\
-VLM only          & BBox VLM + consistency; Swin quality ignored  & 0.539 & 0.231 & 0.076 & 28.2 & 0.528 & 0.234 & 0.047 & 26.9 \\
-Triage            & Swin + VLM + consistency                      & 0.539 & 0.245 & 0.079 & 28.8 & 0.535 & 0.260 & 0.090 & 29.5 \\
-Swin only         & Swin agreement threshold; no VLM              & \textbf{0.584} & \textbf{0.322} & 0.100 & 33.6 & 0.580 & \textbf{0.321} & 0.104 & 33.5 \\
+Raw SAM           & No triage; SAM pseudo-labels unchanged        & -- & -- & -- & -- & -- & -- & -- & -- \\
+VLM only          & BBox VLM + consistency; Swin quality ignored  & -- & -- & -- & -- & -- & -- & -- & -- \\
+Triage            & Swin + VLM + consistency                      & -- & -- & -- & -- & -- & -- & -- & -- \\
+Swin only         & Swin agreement threshold; no VLM              & -- & -- & -- & -- & -- & -- & -- & -- \\
 \addlinespace
 \multicolumn{10}{l}{\textit{Discovery contribution (Swin-proposed, VLM-confirmed objects added)}} \\
-Raw SAM + disc.   & SAM baseline + confirmed discovery objects    & 0.558 & 0.233 & 0.060 & 28.5 & 0.583 & 0.248 & 0.123 & 31.8 \\
-Swin + disc.      & Swin filtering + confirmed discovery          & \textbf{0.604} & 0.298 & 0.119 & \textbf{34.2} & \textbf{0.625} & 0.319 & 0.160 & \textbf{36.8} \\
-Triage + disc.    & Full pipeline (ours)                          & 0.540 & 0.237 & \textbf{0.148} & 31.0 & 0.599 & 0.274 & \textbf{0.162} & 34.5 \\
+Raw SAM + disc.   & SAM baseline + confirmed discovery objects    & -- & -- & -- & -- & -- & -- & -- & -- \\
+Swin + disc.      & Swin filtering + confirmed discovery          & -- & -- & -- & -- & -- & -- & -- & -- \\
+Triage + disc.    & Full pipeline (ours)                          & -- & -- & -- & -- & -- & -- & -- & -- \\
 \addlinespace
-\multicolumn{10}{l}{\textit{Triage rule ablations (offline replay, pending)}} \\
-Disjunctive reject & Any single negative signal rejects          & -- & -- & -- & -- & -- & -- & -- & -- \\
-Uniform $\tau_q$   & Single threshold across all classes         & -- & -- & -- & -- & -- & -- & -- & -- \\
+\multicolumn{10}{l}{\textit{Triage rule ablations (offline replay)}} \\
+Disjunctive reject & Any single negative signal rejects           & -- & -- & -- & -- & -- & -- & -- & -- \\
+Uniform $\tau_q$   & Single threshold across all classes          & -- & -- & -- & -- & -- & -- & -- & -- \\
 With Swin bypass   & Skip BBox when $\alpha \geq \tau_{\text{skip}}$ & -- & -- & -- & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}}

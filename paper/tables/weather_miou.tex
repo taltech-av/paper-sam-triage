@@ -1,0 +1,22 @@
+\begin{table*}[t]
+\centering
+\caption{Per-weather mIoU on CLFTv2-Base CrossFusion for key annotation variants.
+         GT baseline uses the clean partition; VLM variants use the flagged partition.
+         Night and snow conditions have lower rare-class pixel density (see Table~\ref{tab:dataset_distributions}),
+         making human-class IoU particularly sensitive to annotation quality in those conditions.
+         All values pending final training runs.}
+\label{tab:weather_miou}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llccccc c}
+\toprule
+\textbf{Annotation} & \textbf{VLM} & \textbf{Day-fair} & \textbf{Day-rain} & \textbf{Night-fair} & \textbf{Night-rain} & \textbf{Snow} & \textbf{Overall} \\
+\midrule
+GT (manual)        & --             & -- & -- & -- & -- & -- & -- \\
+Raw SAM            & --             & -- & -- & -- & -- & -- & -- \\
+Swin + disc.       & Qwen2.5-VL-72B & -- & -- & -- & -- & -- & -- \\
+Swin + disc.       & LLaVA-1.6-34B  & -- & -- & -- & -- & -- & -- \\
+Triage + disc.     & Qwen2.5-VL-72B & -- & -- & -- & -- & -- & -- \\
+Triage + disc.     & LLaVA-1.6-34B  & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}}
+\end{table*}

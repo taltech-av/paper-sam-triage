@@ -298,9 +298,17 @@ The best-performing single annotation set is \textbf{Swin + discovery}, suggesti
 
 \input{tables/downstream}
 
+\input{tables/weather_miou}
+
+\subsection{Modality Ablation}
+
+Table~\ref{tab:modality_ablation} isolates the contribution of each sensor modality by training CLFTv2-Base in RGB-only, LiDAR-only, and CrossFusion configurations on the best-performing annotation variant (Swin + disc.) for both VLMs and the GT baseline.
+
+\input{tables/modality_ablation}
+
 \subsection{Ablation Studies}
 
-All triage-rule variants are generated offline from stored agent outputs using \texttt{replay\_triage.py}; VLM backbone ablations require separate inference runs.
+All triage-rule variants are generated offline from stored agent outputs using \texttt{replay\_triage.py}; no additional VLM inference is required.
 
 \input{tables/ablation}
 
