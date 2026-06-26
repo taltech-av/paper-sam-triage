@@ -140,7 +140,30 @@ VARIANTS = {
 
 # ── Annotation writer (mirrors annotation_writer.py logic) ───────────────────
 
-def _write_annotation(frame_id: str, decisions: dict[int, str], out_dir: Path) -> None:
+def _add_discoveries(ann: np.ndarray, discovered: list, confirmed_only: bool) -> None:
+    """Paint Swin-detected discovery objects onto ann in-place.
+
+    bbox_orig format is [x1, y1, x2, y2] (col_start, row_start, col_end, row_end).
+    Only background pixels (value 0) are overwritten so SAM proposals that survived
+    triage are never displaced.  This is a bounding-box approximation of the
+    connected-component masks used during the live pipeline run.
+    """
+    for obj in discovered:
+        if confirmed_only and not obj.get("confirmed"):
+            continue
+        x1, y1, x2, y2 = obj["bbox_orig"]
+        class_id = obj["class_id"]
+        region = ann[y1:y2, x1:x2]
+        region[region == 0] = class_id
+
+
+def _write_annotation(
+    frame_id: str,
+    decisions: dict[int, str],
+    out_dir: Path,
+    discovered: list | None = None,
+    discovery_confirmed_only: bool = True,
+) -> None:
     ann_path = config.ANNOTATION_SAM_DIR / f"{frame_id}.png"
     if not ann_path.exists():
         return
@@ -152,6 +175,9 @@ def _write_annotation(frame_id: str, decisions: dict[int, str], out_dir: Path) -
     for p in proposals:
         if decisions.get(p.mask_id) == TRIAGE_REJECT:
             ann[p.pixel_mask] = 0
+
+    if discovered:
+        _add_discoveries(ann, discovered, confirmed_only=discovery_confirmed_only)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     Image.fromarray(ann.astype(np.uint8)).save(out_dir / f"{frame_id}.png")
@@ -172,6 +198,11 @@ def main():
                         help=f"Swin quality threshold τ_q (default: {config.SWIN_AGREEMENT_THRESHOLD})")
     parser.add_argument("--swin-skip", type=float, default=config.SWIN_SKIP_BBOX_THRESHOLD,
                         help=f"Swin bypass threshold τ_skip (default: {config.SWIN_SKIP_BBOX_THRESHOLD})")
+    parser.add_argument("--with-discovery", action="store_true",
+                        help="Add VLM-confirmed discovery objects from stored results (mirrors annotation_swin_discovery)")
+    parser.add_argument("--with-discovery-all", action="store_true",
+                        help="Add ALL Swin-detected discovery candidates, skipping VLM confirmation "
+                             "(ablation: isolates value of VLM confirmation in discovery)")
     parser.add_argument("--hpc", action="store_true", help="Use HPC data paths")
     parser.add_argument("--list-variants", action="store_true", help="List available variants and exit")
     args = parser.parse_args()
@@ -180,6 +211,12 @@ def main():
         for name, (_, desc) in VARIANTS.items():
             print(f"  {name:12s}  {desc}")
         return
+
+    if args.with_discovery and args.with_discovery_all:
+        parser.error("--with-discovery and --with-discovery-all are mutually exclusive")
+
+    use_discovery = args.with_discovery or args.with_discovery_all
+    discovery_confirmed_only = not args.with_discovery_all
 
     if args.hpc:
         config.use_hpc()
@@ -194,10 +231,19 @@ def main():
 
     variants_to_run = list(VARIANTS.items()) if args.variant == "all" else [(args.variant, VARIANTS[args.variant])]
 
+    disc_label = ""
+    if args.with_discovery:
+        disc_label = "_discovery"
+    elif args.with_discovery_all:
+        disc_label = "_discovery_noVLM"
+
     for variant_name, (fn, desc) in variants_to_run:
-        out_dir = config.OUTPUT_ROOT / f"annotation_{variant_name}{args.out_suffix}"
-        print(f"\nVariant : {variant_name}  —  {desc}")
+        out_dir = config.OUTPUT_ROOT / f"annotation_{variant_name}{disc_label}{args.out_suffix}"
+        print(f"\nVariant : {variant_name}{disc_label}  —  {desc}")
         print(f"τ_q     : {args.swin_threshold}   τ_skip: {args.swin_skip}")
+        if use_discovery:
+            mode = "VLM-confirmed only" if discovery_confirmed_only else "ALL Swin candidates (no VLM filter)"
+            print(f"Discovery: {mode}")
         print(f"Output  : {out_dir}")
 
         totals: dict[str, int] = {}
@@ -212,7 +258,10 @@ def main():
                 decisions[mask["mask_id"]] = decision
                 totals[decision] = totals.get(decision, 0) + 1
 
-            _write_annotation(frame_id, decisions, out_dir)
+            discovered = data.get("discovered", []) if use_discovery else None
+            _write_annotation(frame_id, decisions, out_dir,
+                              discovered=discovered,
+                              discovery_confirmed_only=discovery_confirmed_only)
 
         total = sum(totals.values())
         for k, v in sorted(totals.items()):
