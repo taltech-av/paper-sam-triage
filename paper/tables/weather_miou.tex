@@ -1,23 +1,24 @@
 \begin{table*}[t]
 \centering
-\caption{Per-weather mIoU on CLFTv2-Base CrossFusion for key annotation variants.
+\caption{Per-weather mIoU and frequency-weighted IoU (fw-IoU) on CLFTv2-Base CrossFusion for key annotation variants.
          SAM (curated) uses the clean partition; VLM variants use the flagged partition.
          Night and snow conditions have lower rare-class pixel density (see Table~\ref{tab:dataset_distributions}),
          making human-class IoU particularly sensitive to annotation quality in those conditions.
-         Qwen2.5-VL-72B columns pending; all other values are final.}
+         fw-IoU weights each class by its pixel frequency, so it is dominated by vehicles.
+         All values are final.}
 \label{tab:weather_miou}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{llccccc c}
+\begin{tabular}{llccccc cc}
 \toprule
-\textbf{Annotation} & \textbf{VLM} & \textbf{Day-fair} & \textbf{Day-rain} & \textbf{Night-fair} & \textbf{Night-rain} & \textbf{Snow} & \textbf{Overall} \\
+\textbf{Annotation} & \textbf{VLM} & \textbf{Day-fair} & \textbf{Day-rain} & \textbf{Night-fair} & \textbf{Night-rain} & \textbf{Snow} & \textbf{mIoU} & \textbf{fw-IoU} \\
 \midrule
-SAM (curated)            & --             & 48.3 & 51.2 & 42.6 & 37.5 & 42.7 & 44.4 \\
-Raw SAM                  & --             & 40.7 & 39.8 & 41.6 & 35.2 & 36.1 & 38.7 \\
-Swin + disc.\ (no VLM)  & --             & \textbf{52.5} & \textbf{50.5} & \textbf{50.2} & \textbf{52.9} & \textbf{47.2} & \textbf{50.6} \\
-Swin + disc.             & Qwen2.5-VL-72B & -- & -- & -- & -- & -- & -- \\
-Swin + disc.             & LLaVA-1.6-34B  & 51.7 & 49.1 & 50.4 & 48.5 & 47.2 & 49.4 \\
-Triage + disc.           & Qwen2.5-VL-72B & -- & -- & -- & -- & -- & -- \\
-Triage + disc.           & LLaVA-1.6-34B  & 48.4 & 47.5 & 44.4 & 44.6 & 44.1 & 45.8 \\
+SAM (curated)            & --             & 48.3 & 51.2 & 42.6 & 37.5 & 42.7 & 44.4 & 58.9 \\
+Raw SAM                  & --             & 40.7 & 39.8 & 41.6 & 35.2 & 36.1 & 38.7 & 56.5 \\
+Swin + disc.\ (no VLM)  & --             & \textbf{52.5} & \textbf{50.5} & \textbf{50.2} & \textbf{52.9} & \textbf{47.2} & \textbf{50.6} & 58.9 \\
+Swin + disc.             & Qwen2.5-VL-72B & 47.3 & 45.3 & 44.8 & 42.1 & 44.8 & 44.9 & 62.8 \\
+Swin + disc.             & LLaVA-1.6-34B  & 51.7 & 49.1 & 50.4 & 48.5 & 47.2 & 49.4 & \textbf{64.3} \\
+Triage + disc.           & Qwen2.5-VL-72B & 41.3 & 40.0 & 45.7 & 33.7 & 38.7 & 39.9 & 56.7 \\
+Triage + disc.           & LLaVA-1.6-34B  & 48.4 & 47.5 & 44.4 & 44.6 & 44.1 & 45.8 & 61.4 \\
 \bottomrule
 \end{tabular}}
 \end{table*}

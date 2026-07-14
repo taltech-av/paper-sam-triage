@@ -6,3 +6,7 @@ paper/*.log
 paper/*.aux
 paper/*.out
 paper/*.pdf
+paper/*.bbl
+paper/*.blg
+qualitative_candidates/
+

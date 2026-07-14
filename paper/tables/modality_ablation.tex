@@ -3,28 +3,28 @@
 \caption{Modality ablation on CLFTv2-Base using Swin + disc.\ (LLaVA-confirmed) as the annotation variant.
          RGB uses camera only; LiDAR uses depth projection only; CrossFusion uses both.
          SAM (curated) baseline trains on clean-partition SAM annotations verified by manual inspection.
-         mIoU averages vehicle, sign, and human.
-         Qwen2.5-VL-72B columns pending; LLaVA-1.6-34B and SAM (curated) values are final.}
+         mIoU averages vehicle, sign, and human; fw-IoU weights each class by pixel frequency.
+         All values are final.}
 \label{tab:modality_ablation}
 \resizebox{\columnwidth}{!}{%
-\begin{tabular}{llcccc}
+\begin{tabular}{llccccc}
 \toprule
-\textbf{Modality} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} \\
+\textbf{Modality} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} \\
 \midrule
-\multicolumn{6}{l}{\textit{SAM (curated) baseline — clean partition}} \\
-RGB         & -- & 62.2 & 33.5 & 27.9 & 41.2 \\
-LiDAR       & -- & 51.4 & 22.8 & 17.1 & 30.4 \\
-CrossFusion & -- & 65.7 & 36.7 & 31.0 & 44.4 \\
+\multicolumn{7}{l}{\textit{SAM (curated) baseline — clean partition}} \\
+RGB         & -- & 62.2 & 33.5 & 27.9 & 41.2 & 54.3 \\
+LiDAR       & -- & 51.4 & 22.8 & 17.1 & 30.4 & 43.7 \\
+CrossFusion & -- & 65.7 & 36.7 & 31.0 & 44.4 & 57.8 \\
 \addlinespace
-\multicolumn{6}{l}{\textit{Swin + disc.\ — Qwen2.5-VL-72B}} \\
-RGB         & Qwen2.5-VL-72B & -- & -- & -- & -- \\
-LiDAR       & Qwen2.5-VL-72B & -- & -- & -- & -- \\
-CrossFusion & Qwen2.5-VL-72B & -- & -- & -- & -- \\
+\multicolumn{7}{l}{\textit{Swin + disc.\ — Qwen2.5-VL-72B}} \\
+RGB         & Qwen2.5-VL-72B & 66.9 & 32.5 & 26.0 & 41.8 & 59.8 \\
+LiDAR       & Qwen2.5-VL-72B & 53.7 & 24.8 & 14.4 & 30.9 & 47.7 \\
+CrossFusion & Qwen2.5-VL-72B & 69.3 & 37.6 & 27.8 & 44.9 & 62.7 \\
 \addlinespace
-\multicolumn{6}{l}{\textit{Swin + disc.\ — LLaVA-1.6-34B}} \\
-RGB         & LLaVA-1.6-34B & 69.8 & 33.8 & 35.3 & 46.3 \\
-LiDAR       & LLaVA-1.6-34B & 55.3 & 25.6 & 17.4 & 32.8 \\
-CrossFusion & LLaVA-1.6-34B & 70.5 & 40.5 & 37.2 & 49.4 \\
+\multicolumn{7}{l}{\textit{Swin + disc.\ — LLaVA-1.6-34B}} \\
+RGB         & LLaVA-1.6-34B & 69.8 & 33.8 & 35.3 & 46.3 & 60.9 \\
+LiDAR       & LLaVA-1.6-34B & 55.3 & 25.6 & 17.4 & 32.8 & 47.7 \\
+CrossFusion & LLaVA-1.6-34B & 70.5 & 40.5 & 37.2 & 49.4 & 63.0 \\
 \bottomrule
 \end{tabular}}
 \end{table}

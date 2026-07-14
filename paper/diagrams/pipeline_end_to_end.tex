@@ -67,8 +67,8 @@
 \draw[->] (consist) -- (bbox);
 \draw[->, gray, dashed] (bbox)    -- (correct);
 \draw[->, gray, dashed] (correct) -- (triage);
-\draw[->] (triage.south) -- ++(0,-3.5mm) -| (out.north -| triage);
-\draw[->] (triage.south) -- ++(0,-2mm) -| (fma.north);
+\draw[->] (triage.south) -- (out.north);
+\draw[->, gray, dashed] (triage.east) -| (fma.north);
 
 %% BBox → Triage direct path (accept / reject / review — skips Correction)
 \draw[->] (bbox.east) -- ++(4mm,0) |- (triage.east);
@@ -79,6 +79,6 @@
 \draw[->] (uncov)    -- (cc);
 \draw[->] (cc)       -- (disc_vlm);
 \draw[->] (disc_vlm) -- (confirmed);
-\draw[->] (confirmed.south) -- ++(0,-4mm) -| (out.east);
+\draw[->] (confirmed.south) |- (out.east);
 
 \end{tikzpicture}
