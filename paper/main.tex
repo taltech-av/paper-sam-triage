@@ -47,8 +47,10 @@ We answer this through a semi-supervised pipeline on the Zenseact Open Dataset (
 Both signals score masks from 4{,}135 unannotated flagged frames; a Swin-driven discovery module additionally recovers objects SAM missed.
 We evaluate with two open-weight VLMs (LLaVA-1.6-34B and Qwen2.5-VL-72B) using identical fixed prompts for both, measuring downstream effect by training a camera–LiDAR fusion model on every annotation variant.
 
-Under this fixed-prompt, zero-shot setting, the domain-adapted Swin subsumes the VLM at every stage: Swin + discovery without VLM confirmation (50.6 mIoU) outperforms VLM-confirmed discovery (49.4 mIoU) and the curated SAM baseline (44.4 mIoU), while VLM-only triage falls below unfiltered SAM.
-Applying the same prompts to Qwen2.5-VL-72B reveals that prompt-response calibration, not model capability, determines annotation quality: Qwen accepts 93.3\% of masks as valid versus LLaVA's 62.1\%, and confirms only 17.8\% of discovery candidates versus 82.5\%, producing consistently lower downstream mIoU despite being a more recent model.
+All variants are evaluated against a single human-curated reference on a common test set, with paired bootstrap confidence intervals.
+Under this fixed-prompt, zero-shot setting, the domain-adapted Swin subsumes the VLM: Swin-only filtering reaches 47.6 mIoU, significantly exceeding both the curated SAM baseline trained on the clean partition (44.4 mIoU; $\Delta{=}{+}3.3$, 95\% CI $[+1.5,+5.5]$) and unfiltered SAM pseudo-labels (43.2 mIoU), while adding VLM verdicts to the triage rule yields no significant further gain.
+Swin-driven discovery recovers thousands of objects SAM missed; VLM-confirmed discovery still trails Swin-only filtering (best case 45.1 mIoU), but requiring agreement between both VLMs before adding a candidate recovers annotation quality to parity with the curated baseline (44.7 vs.\ 44.4), whereas a single VLM's large, unselective confirmed set approaches the cost of adding every unconfirmed candidate.
+Applying the same prompts to Qwen2.5-VL-72B reveals that prompt-response calibration, not model capability, determines annotation behaviour: Qwen accepts 93.3\% of masks as valid versus LLaVA's 62.1\%, yet confirms only 17.8\% of discovery candidates versus 82.5\%, and these behavioural differences propagate directly to downstream training.
 All decisions trace to explicit outputs with no learned fusion weights, enabling full reproducibility without re-running VLM inference.
 \end{abstract}
 
@@ -77,8 +79,8 @@ Our contributions are:
 \begin{itemize}
     \item \textbf{a controlled comparison} of domain-adapted segmentation and zero-shot VLM verification under identical fixed prompts, showing when each signal is reliable and when it is not,
     \item \textbf{a prompt-portability analysis} demonstrating that VLM acceptance and discovery rates vary dramatically across models under the same prompts, and that this behavioural calibration, not general model capability, determines downstream annotation quality,
-    \item \textbf{a Swin-driven discovery mechanism} that recovers objects missed by SAM without requiring VLM confirmation,
-    \item and \textbf{a downstream study} quantifying how each annotation variant affects camera–LiDAR fusion performance, providing a task-level measure of annotation quality beyond mask agreement.
+    \item \textbf{a Swin-driven discovery mechanism} that recovers objects missed by SAM, together with a downstream analysis showing that discovery quality tracks candidate-set volume and precision, and that requiring two-VLM agreement before confirming a candidate recovers annotation quality to parity with a curated baseline,
+    \item and \textbf{a downstream study} under a single curated evaluation reference with paired bootstrap confidence intervals, quantifying how each annotation variant affects camera–LiDAR fusion performance beyond mask agreement.
 \end{itemize}
 
 
@@ -240,7 +242,7 @@ Both partitions are split independently using the same stratified procedure.
 Frames are grouped into ten strata defined by weather condition (day-fair, day-rain, night-fair, night-rain, snow) crossed with rare-class presence (cyclist or pedestrian pixels $\geq 50$), so every split mirrors the overall weather and class-frequency distribution.
 Within each stratum, 10\,\% of frames are held out for validation and the remainder is allocated between test and training.
 Because night-rain and snow conditions are under-represented in ZOD, we enforce a minimum of 40 frames per weather category in the test set, increasing the effective test ratio for small conditions only.
-Per-weather test subsets are used for all downstream evaluations to isolate weather-specific mIoU.
+All downstream evaluations use the per-weather test subsets of the \emph{clean} partition (565 frames total), scored against the manually curated annotations; Section~\ref{sec:experiments} details this protocol.
 Split sizes are summarised in Table~\ref{tab:splits}.
 
 \input{tables/splits}
@@ -267,50 +269,70 @@ Estimated VRAM footprint (quantized weights plus a bounded KV cache at the deplo
 We train CLFTv2-Base (RGB--LiDAR fusion) on all annotation variants.
 VLM-dependent variants use the flagged partition (4{,}135 frames, train split from Table~\ref{tab:splits}); a curated SAM baseline uses the clean partition (2{,}319 frames) to provide a quality-controlled reference at a smaller annotation volume.
 Rejected pixels are mapped to \texttt{ignore} in all VLM-annotated variants.
-Evaluation uses the five per-weather test subsets; results are reported as mIoU averaged over vehicle, sign, and human (cyclist + pedestrian combined).
+
+\paragraph{Evaluation Protocol}
+Comparing annotation variants requires a reference that is independent of every variant's own training labels: scoring a model against the same pseudo-labels it was trained on measures label self-consistency rather than segmentation quality, and inflates precisely the variants with the most idiosyncratic labels.
+We therefore evaluate every trained model on the same held-out frames, the five per-weather test subsets of the clean partition (565 frames), against the manually curated annotations, the only human-verified reference available.
+Results are reported as mIoU averaged over vehicle, sign, and human (cyclist + pedestrian combined), where the overall mIoU is the mean of the five per-weather mIoUs.
+Uncertainty is quantified with a paired bootstrap: test frames are resampled with replacement 10{,}000 times within each weather stratum, with identical resample indices for all variants, yielding 95\% confidence intervals for each variant and for pairwise mIoU differences.
+One caveat is inherent to this protocol: the curated reference is itself SAM-derived, so objects that SAM missed are absent from it, and a model that correctly segments such objects is penalised.
+Discovery-related results below should be read with this conservative bias in mind.
 We additionally include a modality ablation (RGB, LiDAR, Fusion) on the Swin + disc.\ variant to quantify each sensor stream's contribution independently of annotation quality.
 
-Table~\ref{tab:ablation} reports vehicle, sign, and combined human-class IoU (cyclist + pedestrian) for all variants. 
+Table~\ref{tab:ablation} reports vehicle, sign, and combined human-class IoU (cyclist + pedestrian) for all variants.
 Several observations emerge from these results.
 
-\textbf{Swin-based filtering provides a strong baseline.}
-Swin-only filtering achieves 45.7 mIoU, higher than the full Swin + VLM triage (40.5). 
-The difference is driven primarily by sign and vehicle classes (sign: 39.2 vs.\ 34.3; vehicle: 69.1 vs.\ 64.6). 
-Crop-based VLM classification introduces false rejections on small, thin signs where pixel-level Swin agreement appears to be a more reliable signal. 
-VLM-only triage (37.6 mIoU) falls below the unfiltered raw SAM baseline (38.7), suggesting that VLM judgments alone are not sufficient for rejection decisions under the fixed-prompt configuration used here.
+\textbf{Swin-filtered pseudo-labels surpass the curated baseline.}
+Swin-only filtering achieves 47.6 mIoU, the best result of any variant, exceeding the curated SAM baseline trained on 2{,}319 manually reviewed frames (44.4; paired $\Delta{=}{+}3.3$, 95\% CI $[+1.5,+5.5]$, $P(\Delta{\leq}0){=}0.0004$) and unfiltered raw SAM (43.2; $\Delta{=}{+}4.5$, CI $[+3.0,+6.2]$).
+Annotation volume combined with a domain-adapted quality signal therefore compensates for the label-quality gap of pseudo-labels: filtering alone, with no VLM involvement, converts 4{,}135 flagged frames into better training data than 2{,}319 hand-curated ones.
 
-\textbf{Discovery consistently improves downstream performance.}
-Adding discovery objects increases mIoU over both base configurations: raw SAM (38.7 $\to$ 43.5) and Swin-only (45.7 $\to$ 50.6). 
-The gain is strongest for the human class ($+$11.5 IoU over Swin-only), where the discovery module recovers missed pedestrians and cyclists. 
-Swin + disc.\ without VLM confirmation (50.6 mIoU; vehicle 65.9, sign 45.8, human 40.3) slightly exceeds VLM-confirmed discovery (49.4 mIoU; vehicle 70.5, sign 40.5, human 37.2). 
-The per-class breakdown suggests that VLM confirmation is reliable for large, visually unambiguous vehicle crops, but less reliable for compact or partially occluded sign and human candidates.
+\textbf{VLM triage adds no significant gain over Swin.}
+Full triage (Swin + VLM + consistency) reaches 44.5 mIoU with LLaVA and 43.9 with Qwen, both \emph{below} Swin-only filtering ($\Delta{=}{-}3.2$, CI $[-5.1,-1.5]$ for LLaVA), and VLM-only triage without the Swin signal is statistically indistinguishable from full triage (LLaVA: 43.7 vs.\ 44.5, $\Delta{=}{+}0.9$, CI $[-1.2,+2.9]$).
+Crop-based VLM rejection removes masks that pixel-level Swin agreement retains, and the removals hurt more than they help under the fixed-prompt configuration studied here.
 
-\textbf{Aggregate metrics reflect class imbalance.}
-fw-IoU (weighted by pixel frequency) favours VLM-confirmed discovery (64.3 vs.\ 58.9), while mIoU (equal class weight) favours no-VLM discovery (50.6 vs.\ 49.4).
-The divergence traces to per-class IoU: VLM confirmation improves vehicle IoU by 4.6 points (70.5 vs.\ 65.9) but reduces sign IoU by 5.3 points (40.5 vs.\ 45.8) and human IoU by 3.1 points (37.2 vs.\ 40.3).
-Vehicle pixels constitute approximately 76\% of foreground pixels in ZOD, so the vehicle advantage dominates fw-IoU; under equal-class weighting it is outweighed by the sign and human losses.
-This reflects the mechanism identified for agent performance: VLM crop-based verification is reliable for large, visually unambiguous vehicle candidates but over-rejects compact sign and human discoveries.
-For safety-critical annotation, rare-class recovery is often prioritised, making mIoU a more informative metric in this context.
+\textbf{Discovery regions carry a volume-dependent annotation cost, distinct from mask geometry.}
+An earlier version of this analysis painted discovery candidates as filled bounding-box rectangles rather than their true connected-component shape; retraining every discovery variant on the exact object masks changes the no-VLM result substantially (21.1 $\to$ 39.5 mIoU) while leaving the VLM-confirmed variants nearly unchanged (Qwen: 46.0 $\to$ 45.1; LLaVA: 41.0 $\to$ 40.5), confirming that rectangle noise scales with the number of unconfirmed candidates and contributes little once a VLM has already trimmed the set.
+With this confound removed, discovery still reduces mIoU relative to Swin-only in every configuration: Swin-only (0 regions, 47.6) $>$ Qwen-confirmed (9{,}878 regions, 45.1; $\Delta{=}{+}2.6$, CI $[+1.1,+4.4]$) $>$ LLaVA-confirmed (45{,}882 regions, 40.5; $\Delta{=}{+}7.2$, CI $[+5.6,+9.1]$) $\approx$ unconfirmed (all 55{,}630 candidates, 39.5; $\Delta{=}{+}8.2$, CI $[+6.5,+9.9]$).
+Because the curated evaluation reference is itself SAM-derived, it cannot credit genuine recoveries (see Evaluation Protocol), so part of this cost is an artifact of the reference rather than the annotations; the remainder tracks candidate-set precision, larger, less selective confirmed sets (LLaVA's 45{,}882) approach the unconfirmed case (39.5 vs.\ 40.5, CI $[-0.0,+1.9]$, not clearly separable), while smaller, more selective sets (Qwen's 9{,}878) retain most of Swin-only's advantage.
 
-\textbf{Swin + discovery surpasses the curated SAM baseline.}
-Table~\ref{tab:ablation} shows that Swin + disc.\ (no VLM) trained on 4{,}135 pseudo-labeled frames (50.6 mIoU) exceeds the curated SAM baseline trained on 2{,}319 clean frames (44.4 mIoU) across all classes, including the human class (40.3 vs.\ 31.0 IoU).
-This suggests that annotation volume combined with Swin-based triage can compensate for the label-quality gap, even without VLM confirmation.
+\textbf{Cross-model consensus recovers discovery to curated-baseline parity.}
+Requiring both VLMs to independently confirm a discovery candidate, the same concordance principle used for triage rejection, yields a smaller set (8{,}703 objects) than either VLM alone and closes most of the gap: Swin filtering with both-confirmed discovery reaches 44.7 mIoU, statistically indistinguishable from the curated baseline (44.4; $\Delta{=}{+}0.3$, CI $[-1.6,+2.0]$) and from Qwen's own selective confirmation (45.1; $\Delta{=}{-}0.4$, CI $[-1.5,+0.6]$), while significantly exceeding LLaVA's confirmed set (40.5; $\Delta{=}{+}4.2$, CI $[+2.4,+5.8]$).
+Agreement between independent VLMs thus functions as a precision filter for discovery candidates, though it remains below Swin-only filtering with no discovery at all (47.6; $\Delta{=}{+}3.0$, CI $[+1.3,+5.1]$).
+Applying the more permissive union-reject triage rule (Section~\ref{sec:methodology} ablations) to the same both-confirmed discovery set instead reaches only 42.6, below either single-VLM triage (LLaVA 44.5, Qwen 43.9), reinforcing that Swin-based filtering, not VLM agreement, is what drives triage quality.
 
-\textbf{Where VLM confirmation helps.}
-Raw SAM + VLM-confirmed discovery (43.5 mIoU) outperforms unfiltered raw SAM (38.7) by 4.8 points. 
-In this configuration, VLM confirmation validates Swin-detected candidates without participating in rejection triage, and the improvement indicates that VLM confirmation can be beneficial when no domain-adapted quality signal is available. 
-Once such a signal is present, VLM confirmation becomes less influential, as the Swin Quality Agent already identifies many of the same candidates.
+\textbf{Discovery inverts the VLM ranking.}
+Under identical prompts, Qwen confirms far fewer discovery candidates than LLaVA (17.8\% vs.\ 82.5\%, Table~\ref{tab:agent_behavior}), which Section~\ref{sec:experiments} initially suggests is excessive scepticism.
+Downstream, that scepticism is protective: Qwen's Swin + disc.\ variant scores 45.1 versus LLaVA's 40.5 ($\Delta{=}{+}4.6$, CI $[+3.3,+5.8]$).
+Prompt-response calibration thus propagates directly to downstream performance, and the direction of the effect depends on whether the elicited behaviour (acceptance or scepticism) matches the reliability of the candidate stream, not on model capability or recency.
+
+\textbf{The triage limitation fixes show no significant downstream effect at this scale.}
+Section~\ref{sec:experiments} identifies two triage weaknesses from qualitative inspection: unilateral rejection on a bare \texttt{background} verdict, and a LiDAR support threshold that is not class-aware.
+Applying both fixes (\texttt{background\_protected} and \texttt{lidar\_class\_aware}) rescues 1{,}002 masks (914{,}277 pixels: 892 signs, 66 cyclists, 37 pedestrians, 7 vehicles) from rejection under offline replay, matching the classes and mechanism of the qualitative examples in Fig.~\ref{fig:limitations}.
+Retraining LLaVA's Swin + disc.\ variant with the fixed triage rule, holding the discovery set constant, gives 39.1 mIoU versus 40.5 for the unfixed rule ($\Delta{=}{-}1.2$, CI $[-2.3,+0.1]$), not a significant difference.
+The rescued masks are a small fraction of the 90{,}761-mask training set, and their effect may be swamped by the same discovery-volume cost identified above; isolating the triage fix from a no-discovery baseline is left to future work.
 
 \input{tables/ablation}
 
 \textbf{Prompt-response calibration dominates model capability.}
 Table~\ref{tab:agent_behavior} compares per-VLM agent outputs on the same 90{,}761 masks using identical prompts.
 The BBox verdicts diverge sharply: LLaVA returns \texttt{valid} on 62.1\% of crops while Qwen returns \texttt{valid} on 93.3\%, suggesting the fixed forced-choice prompt elicits a near-unconditional acceptance response from Qwen rather than the selective judgement it produces in LLaVA.
-The miscalibration is class-specific: sign rejection drops from 26.6\% to 5.3\% and cyclist rejection from 47.4\% to 8.1\%, so Qwen retains many small-object masks that LLaVA correctly filters.
-The pattern inverts for discovery: Qwen confirms only 17.8\% of Swin-proposed candidates (9{,}878 objects, 490 human-class) against LLaVA's 82.5\% (45{,}882 objects, 6{,}415 human-class), indicating the discovery prompt elicits excessive scepticism from Qwen under the same zero-shot conditions.
-These results show that identical prompts can produce qualitatively different annotation behaviours across VLMs, and that downstream quality tracks prompt-response calibration more closely than general model capability.
+The miscalibration is class-specific: sign rejection drops from 26.6\% to 5.3\% and cyclist rejection from 47.4\% to 8.1\%, so Qwen retains many small-object masks that LLaVA rejects.
+The pattern inverts for discovery: Qwen confirms only 17.8\% of Swin-proposed candidates (9{,}878 objects, 490 human-class) against LLaVA's 82.5\% (45{,}882 objects, 6{,}415 human-class).
+Neither behaviour is uniformly better: Qwen's permissive triage and LLaVA's permissive discovery each admit noise, and as Table~\ref{tab:ablation} shows, the downstream consequences track which candidate stream the permissiveness is applied to, with Qwen's conservative discovery confirmation yielding the higher downstream mIoU.
+These results show that identical prompts can produce qualitatively different annotation behaviours across VLMs, and that downstream outcomes track prompt-response calibration more closely than general model capability.
 
 \input{tables/agent_behavior}
+
+\textbf{Within-model prompt sensitivity.}
+The cross-model divergence above could in principle reflect stable model dispositions rather than prompt effects.
+A development-stage revision of the prompt set provides a direct within-model test: an earlier Qwen2.5-VL-72B run with the original prompts covers 1{,}000 of the same flagged frames (13{,}612 masks), and all VLM-independent signals are bit-identical across the two runs.
+Table~\ref{tab:prompt_sensitivity} compares the two prompt versions on this overlap subset, with triage outcomes recomputed under the final deterministic rule so that differences reflect prompt and response-protocol changes only.
+The revision, wording intended to improve small-object handling plus a stricter response-parsing protocol, flipped 25.9\% of Qwen's BBox verdicts and raised its valid rate from 64.4\% to 85.2\%; under the original prompts, Qwen's verdict distribution had been close to LLaVA's under the revised prompts (64.4\% vs.\ 63.7\% valid).
+The vehicle discovery prompt was not revised and its confirmation rate is unchanged (54.3\% vs.\ 54.4\%), ruling out run-to-run sampling noise, while the revised sign and human discovery prompts shifted confirmation by $+$11.7 and $+$9.7 points.
+Qwen's near-unconditional acceptance is therefore not an innate disposition but a model-specific response to a prompt revision that left LLaVA selective, and the within-model prompt effect (25.9\% of verdicts) is of the same order as the cross-model disagreement under identical prompts (40.6--42.9\% on the same subset).
+Both findings point to the same practical requirement: any change of model \emph{or} prompt in a VLM annotation pipeline requires behavioural re-validation.
+
+\input{tables/prompt_sensitivity}
 
 Table~\ref{tab:agent_performance} quantifies signal agreement using Swin quality as the reference on 89{,}880 masks with Swin scores available (881 geometry-prefiltered masks are excluded).
 LLaVA achieves balanced precision and recall (72.0 / 71.1, F1 71.5), indicating selective verdicts that align with Swin.
@@ -321,16 +343,17 @@ Cross-VLM BBox agreement is 61.4\%, meaning the two models disagree on nearly fo
 \input{tables/agent_performance}
 
 Table~\ref{tab:weather_miou} reports per-weather mIoU and overall fw-IoU for key annotation variants.
-Swin + disc.\ (no VLM) achieves the highest mIoU across all five weather conditions (50.6 overall), yet Swin + disc.\ (LLaVA-confirmed) leads on fw-IoU (64.3 vs.\ 58.9).
-The split is consistent with the per-class analysis above: VLM confirmation trades vehicle IoU for sign and human IoU, so the fw-IoU/mIoU divergence follows the same vehicle-pixel-frequency mechanism in every weather condition.
-Notably, Swin + disc.\ (no VLM) night-rain mIoU (52.9) exceeds day-rain (50.5), whereas the curated SAM baseline shows the opposite pattern (37.5 night-rain vs.\ 51.2 day-rain).
-This suggests that the discovery module recovers human-class objects that SAM systematically misses in low-illumination rainy conditions.
+Swin-only filtering leads in every weather condition, and its margin over the curated baseline is largest away from ideal conditions (snow: 49.4 vs.\ 42.7; night-fair: 46.3 vs.\ 42.6), suggesting that Swin-based filtering removes exactly the low-visibility label noise that frame-level manual curation does not fix.
+Night-rain remains the hardest condition for every variant (37.1 for Swin-only), and with only 45 night-rain test frames its per-condition estimates carry the widest uncertainty.
+The discovery variants' shortfall relative to Swin-only is consistent across all five conditions, confirming that it is not driven by a single weather stratum.
 
 \input{tables/weather_miou}
 
 \subsection{Modality Ablation}
 
-Table~\ref{tab:modality_ablation} isolates the contribution of each sensor modality by training CLFTv2-Base in RGB-only, LiDAR-only, and CrossFusion configurations on both VLMs' Swin + disc.\ annotation variants and the curated SAM baseline.
+Table~\ref{tab:modality_ablation} isolates the contribution of each sensor modality by training CLFTv2-Base in RGB-only, LiDAR-only, and CrossFusion configurations on the curated SAM baseline.
+CrossFusion exceeds both single-modality models (44.4 vs.\ 41.2 RGB and 30.4 LiDAR), confirming that camera--LiDAR fusion contributes beyond either sensor alone.
+The RGB-only and LiDAR-only breakdown for the VLM discovery variants was retrained only for CrossFusion in this revision (Section~\ref{sec:experiments}); the CrossFusion figures are included in Table~\ref{tab:modality_ablation} for reference, and a full modality breakdown of the discovery variants is left to future work.
 
 \input{tables/modality_ablation}
 
@@ -341,10 +364,10 @@ All runs use a reset learning rate; the comparison focuses on \emph{convergence 
 iSEAuto contains vehicle and human classes only (no sign); mIoU is averaged over those two classes.
 
 Figure~\ref{fig:iseauto_convergence} shows the full convergence trajectory (5-epoch smoothed mIoU, sampled every 5 epochs from epoch 10 to 90).
-The Swin + disc.\ (no VLM) initialisation separates from the other two at epoch 20 (52.3 vs.\ 49.8 for scratch, smoothed), indicating that the higher-quality ZOD annotations yield representations that adapt faster to a new domain.
+The Swin + disc.\ (no VLM) initialisation separates from the other two at epoch 20 (52.3 vs.\ 49.8 for scratch, smoothed), while the raw SAM checkpoint follows the ImageNet-initialisation curve throughout, showing no benefit from domain exposure alone.
 By epoch 30 all three methods have converged to the same trajectory ($\approx$55 mIoU), and by epoch 90 all reach approximately the same final level ($\approx$67 mIoU).
-Notably, the ZOD raw SAM checkpoint follows the same curve as ImageNet initialisation throughout, showing no convergence benefit at any point.
-This dissociation (Swin+disc helps, raw SAM does not) indicates that domain exposure alone is insufficient; the annotation quality improvement from Swin-based triage is what encodes the transferable features.
+This transfer result is notable because the same Swin + disc.\ checkpoint scores \emph{lowest} against the curated ZOD reference (Table~\ref{tab:ablation}): representations shaped by Swin-filtered labels with dense discovery supervision adapt faster to a new domain even though the discovery regions depress mIoU against a SAM-derived reference.
+The dissociation is consistent with the evaluation-protocol caveat of Section~\ref{sec:experiments}, discovery supervision may encode real objects the reference cannot credit, but it may equally reflect a generic benefit of denser foreground supervision; distinguishing the two requires human-verified evaluation labels.
 
 \begin{figure}[t]
   \centering
@@ -431,9 +454,9 @@ Second, the three-signal design assumes Swin, the VLM, and LiDAR consistency fai
 \subsection{Reproducibility}
 
 All components of our pipeline are released as open source to support reproducible research. The SAM‑based annotation generator is available at
-\url{https://github.com/taltech-av/paper-ral-zod-sam-generator},
+\url{https://github.com/taltech-av/paper-aim2026-zod-sam-generator},
 and the multi‑modal fusion training framework is provided at
-\url{https://github.com/taltech-av/paper-ral-fusion-trainer}.
+\url{https://github.com/taltech-av/paper-aim2026-fusion-trainer}.
 Processed datasets used in this work, including the curated SAM‑generated ZOD segmentation subset and the SAM‑enhanced Iseauto annotations, can be downloaded from
 \url{https://app.visin.eu/datasets}.
 Training logs, model outputs, and visualization dashboards are accessible at
@@ -444,10 +467,14 @@ Training logs, model outputs, and visualization dashboards are accessible at
 
 This work evaluates a multi-agent refinement pipeline for SAM-based annotation in autonomous driving, combining a domain-adapted Swin Transformer with fixed-prompt visual--LLM agents and deterministic decision rules. Across experiments on ZOD, the Swin Quality Agent, trained on a small clean partition, provides a stable signal for both mask triage and object discovery, enabling refinement with a single forward pass per frame and supporting fully reproducible offline ablations.
 
-Swin-based filtering offers a strong baseline under the fixed-prompt configuration studied here, and Swin-driven discovery consistently improves downstream segmentation, particularly for pedestrians and cyclists. Applying identical prompts to Qwen2.5-VL-72B reveals that prompt-response calibration determines annotation quality more than model capability: the same prompt elicits near-unconditional acceptance from Qwen in triage and excessive scepticism in discovery, producing systematically different annotation distributions without any change to the pipeline. This finding has a practical implication: deploying a VLM annotation pipeline with a new model requires behavioural validation of prompt responses, not just a capability benchmark.
+Under a single curated evaluation reference with paired bootstrap confidence intervals, Swin-only filtering is the strongest annotation strategy: pseudo-labels from 4{,}135 flagged frames filtered by the Swin agreement signal outperform a curated SAM baseline trained on 2{,}319 clean frames ($\Delta{=}{+}3.3$ mIoU, 95\% CI $[+1.5,+5.5]$), while adding VLM verdicts to the triage rule yields no significant further gain under the fixed-prompt configuration studied here.
+Annotation volume combined with a cheap domain-adapted quality signal therefore compensates for initial label noise without any VLM inference.
+Swin-driven discovery recovers thousands of objects SAM missed, and its downstream cost tracks confirmed candidate-set volume and precision rather than mask geometry: a large, unselective confirmed set trails Swin-only filtering nearly as much as adding every unconfirmed candidate, but requiring both VLMs to agree before confirming a candidate, the same concordance principle used for triage, recovers annotation quality to parity with the curated baseline.
+Because the curated reference is itself SAM-derived and cannot credit genuine recoveries, some of this remaining cost is an artifact of evaluation rather than annotation quality; resolving the two apart requires human-verified evaluation labels, which we identify as the most important next step.
 
-The resulting pseudo-labels trained on 4{,}135 flagged frames outperform a curated SAM baseline trained on 2{,}319 clean frames, indicating that annotation volume combined with targeted refinement can compensate for initial label noise.
-Cross-dataset transfer to iSEAuto confirms that annotation quality affects convergence speed: the Swin + disc.\ checkpoint leads by 2.5 mIoU at epoch 20 (smoothed) and converges to the same final level as scratch by epoch 30, while the raw SAM checkpoint is indistinguishable from ImageNet initialisation throughout, showing that domain exposure alone is insufficient and annotation quality is what encodes transferable features. The architecture is backend-agnostic and suitable for local deployment. Future work includes evaluation on additional datasets, adaptive discovery thresholds, and extensions to panoptic or temporal segmentation.
+Applying identical prompts to Qwen2.5-VL-72B reveals that prompt-response calibration determines annotation behaviour more than model capability: the same prompt elicits near-unconditional acceptance from Qwen in triage and strong scepticism in discovery, producing systematically different annotation distributions without any change to the pipeline, and these differences propagate to downstream training. This finding has a practical implication: deploying a VLM annotation pipeline with a new model requires behavioural validation of prompt responses, not just a capability benchmark.
+
+Cross-dataset transfer to iSEAuto shows that the Swin + disc.\ checkpoint leads by 2.5 mIoU at epoch 20 (smoothed) and converges to the same final level as scratch by epoch 30, while the raw SAM checkpoint is indistinguishable from ImageNet initialisation throughout: domain exposure alone is insufficient, and the filtered, densely supervised labels encode transferable features even where they do not raise mIoU against the SAM-derived reference. The architecture is backend-agnostic and suitable for local deployment. Future work includes human-verified evaluation labels, evaluation on additional datasets, adaptive discovery thresholds, and extensions to panoptic or temporal segmentation.
 
 \section*{Acknowledgement}
 This research has received funding from the European Union’s Horizon 2020 Research and Innovation Programme under grant agreement No. 856602 (Finest Twins), from the European Union's Horizon Europe Research and Innovation Programme under grant agreement No.~101135988 (PLIADES: AI-Enabled Data Lifecycles Optimization and Data Spaces Integration for Increased Efficiency and Interoperability).

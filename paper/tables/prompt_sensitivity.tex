@@ -1,0 +1,33 @@
+\begin{table}[t]
+\centering
+\caption{Within-model prompt sensitivity on the 1000-frame overlap subset. The revised prompts (Section~\ref{sec:methodology}) are applied to the same Qwen2.5-VL-72B model on identical frames; LLaVA-1.6-34B (revised prompts) is shown on the same subset for reference. Triage outcomes are recomputed offline under the current deterministic rule for all columns, so differences reflect prompt changes only. The vehicle discovery prompt was not revised and serves as a control.}
+\label{tab:prompt_sensitivity}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{Qwen (original)} & \textbf{Qwen (revised)} & \textbf{LLaVA (revised)} \\
+\midrule
+\multicolumn{4}{l}{\textit{BBox VLM verdicts}} \\
+Valid & 64.4\% & 85.2\% & 63.7\% \\
+Invalid & 33.7\% & 12.3\% & 34.8\% \\
+Background & 1.9\% & 2.5\% & 1.4\% \\
+\addlinespace
+\multicolumn{4}{l}{\textit{Triage outcomes (current rule, recomputed)}} \\
+Accept & 42.7\% & 49.8\% & 41.9\% \\
+Reject & 23.5\% & 11.4\% & 23.4\% \\
+Human review & 33.9\% & 38.8\% & 33.3\% \\
+\addlinespace
+\multicolumn{4}{l}{\textit{Per-class rejection rate}} \\
+Vehicle & 18.5\% & 12.0\% & 4.5\% \\
+Sign & 25.3\% & 9.6\% & 32.9\% \\
+Cyclist & 32.3\% & 22.7\% & 61.2\% \\
+Pedestrian & 33.0\% & 23.2\% & 19.9\% \\
+\addlinespace
+\multicolumn{4}{l}{\textit{Discovery confirmation rate}} \\
+Vehicle (control) & 54.3\% & 54.4\% & 84.3\% \\
+Sign & 41.5\% & 53.2\% & 81.4\% \\
+Human & 6.3\% & 16.0\% & 67.8\% \\
+Human objects added & 28 & 71 & 301 \\
+\bottomrule
+\end{tabular}}
+\end{table}

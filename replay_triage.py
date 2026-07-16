@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,18 @@ from tqdm import tqdm
 
 import config
 from core.triage import TRIAGE_REJECT, triage
+
+# Class-aware LiDAR support thresholds for the lidar_class_aware variant.
+# Thin/sparse structures (bike frames, sign posts, LED matrices, near-field
+# partial humans) reflect far fewer beams than solid vehicles, so the uniform
+# τ=0.10 drives consistency=fail on real objects (paper Fig. limitations c/d).
+LIDAR_TAU_DEFAULT = 0.10
+LIDAR_TAU_BY_CLASS = {
+    "vehicle": 0.10,
+    "sign": 0.05,
+    "cyclist": 0.05,
+    "pedestrian": 0.05,
+}
 
 
 # ── Triage variants ───────────────────────────────────────────────────────────
@@ -126,6 +139,81 @@ def _triage_uniform_tau(mask: dict, swin_q: float, **_) -> str:
     return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
 
 
+def _quality_out(mask: dict, swin_q: float) -> str | None:
+    """Swin quality verdict: threshold on stored agreement, falling back to the
+    stored per-class verdict (same logic as _triage_full)."""
+    swin = mask.get("scores", {}).get("swin_agreement")
+    if swin is not None:
+        return "good" if swin >= swin_q else mask["agents"].get("quality")
+    return mask["agents"].get("quality")
+
+
+def _consistency_class_aware(mask: dict) -> str | None:
+    """Recompute the LiDAR consistency verdict from the stored support fraction
+    using class-aware thresholds instead of the uniform τ=0.10."""
+    support = mask.get("scores", {}).get("lidar_support")
+    if support is None:
+        return mask["agents"].get("consistency")
+    tau = LIDAR_TAU_BY_CLASS.get(mask.get("class_name"), LIDAR_TAU_DEFAULT)
+    return "pass" if support >= tau else "fail"
+
+
+def _protected_triage(bbox: str | None, quality: str | None,
+                      correction: str | None, consistency: str | None) -> str:
+    """Concordance triage with the background verdict protected by Swin.
+
+    Identical to core.triage.triage except bbox=background counts as two
+    negatives only when Swin quality also disagrees; when Swin says good, it is
+    downgraded to a single negative and the mask routes to human review instead
+    of being rejected outright (paper Fig. limitations a/b: a single VLM
+    misread of a dark or blurred crop deletes a real object unilaterally).
+    """
+    background_confirmed = bbox == "background" and quality != "good"
+    bbox_invalid_confirmed = (
+        bbox == "invalid" and consistency == "pass" and quality != "good"
+    )
+    negatives = sum([
+        2 * background_confirmed,
+        bbox == "background" and not background_confirmed,
+        2 * bbox_invalid_confirmed,
+        bbox == "invalid" and not bbox_invalid_confirmed,
+        quality == "bad",
+        consistency == "fail",
+    ])
+    if negatives >= 2:
+        return TRIAGE_REJECT
+    if bbox == "valid" and quality == "good" and consistency == "pass":
+        return "accept"
+    if bbox == "valid" and quality == "good" and consistency == "fail":
+        return "refine" if correction == "refine" else "human_review"
+    return "human_review"
+
+
+def _triage_background_protected(mask: dict, swin_q: float, **_) -> str:
+    """Limitation fix (a): background verdict no longer rejects unilaterally
+    when Swin quality is good — downgraded to one negative, routed to review."""
+    ag = mask["agents"]
+    return _protected_triage(ag.get("bbox"), _quality_out(mask, swin_q),
+                             ag.get("correction"), ag.get("consistency"))
+
+
+def _triage_lidar_class_aware(mask: dict, swin_q: float, **_) -> str:
+    """Limitation fix (b): class-aware LiDAR support thresholds — sparse-object
+    classes use τ=0.05 so thin structures no longer fail consistency and Swin
+    simultaneously for the same physical reason (correlated failure)."""
+    ag = mask["agents"]
+    return triage(ag.get("bbox"), _quality_out(mask, swin_q), None,
+                  ag.get("correction"), _consistency_class_aware(mask)).decision
+
+
+def _triage_limits_fixed(mask: dict, swin_q: float, **_) -> str:
+    """Both limitation fixes combined: Swin-protected background verdict +
+    class-aware LiDAR thresholds."""
+    ag = mask["agents"]
+    return _protected_triage(ag.get("bbox"), _quality_out(mask, swin_q),
+                             ag.get("correction"), _consistency_class_aware(mask))
+
+
 VARIANTS = {
     "raw_sam":            (_triage_raw_sam,            "No triage — original SAM annotation unchanged (baseline)"),
     "swin_only":          (_triage_swin_only,          "Swin agreement threshold only — no VLM"),
@@ -135,26 +223,62 @@ VARIANTS = {
     "with_bypass":        (_triage_with_bypass,        "Simulate bypass: skip VLM for masks where swin_bypass=True"),
     "disjunctive_reject": (_triage_disjunctive_reject, "Ablation: any single negative signal rejects (vs. concordance ≥2)"),
     "uniform_tau":        (_triage_uniform_tau,        "Ablation: uniform τ_q=0.30 for all classes (no class-aware thresholds)"),
+    "background_protected": (_triage_background_protected, "Limitation fix (a): Swin-protected background verdict"),
+    "lidar_class_aware":  (_triage_lidar_class_aware,  "Limitation fix (b): class-aware LiDAR support thresholds"),
+    "limits_fixed":       (_triage_limits_fixed,       "Both limitation fixes: (a) + (b)"),
 }
 
 
 # ── Annotation writer (mirrors annotation_writer.py logic) ───────────────────
 
-def _add_discoveries(ann: np.ndarray, discovered: list, confirmed_only: bool) -> None:
+_BBOX_FALLBACKS = 0
+
+
+def _load_discovery_masks(frame_id: str):
+    """Exact connected-component masks from regenerate_discovery_masks.py, or None."""
+    masks_dir = config.DATA_ROOT / "vlm" / "discovery_masks"
+    png = masks_dir / f"{frame_id}.png"
+    sidecar = masks_dir / f"{frame_id}.json"
+    if not (png.exists() and sidecar.exists()):
+        return None
+    index_map = np.array(Image.open(png))
+    entries = json.loads(sidecar.read_text())
+    # regenerate_discovery_masks.py assigns PNG index = sidecar position + 1
+    by_bbox = {tuple(e["bbox_384"]): i + 1
+               for i, e in enumerate(entries) if e["match_iou"] > 0}
+    return index_map, by_bbox
+
+
+def _add_discoveries(ann: np.ndarray, discovered: list, confirmed_only: bool,
+                     frame_id: str | None = None) -> None:
     """Paint Swin-detected discovery objects onto ann in-place.
 
-    bbox_orig format is [x1, y1, x2, y2] (col_start, row_start, col_end, row_end).
-    Only background pixels (value 0) are overwritten so SAM proposals that survived
-    triage are never displaced.  This is a bounding-box approximation of the
-    connected-component masks used during the live pipeline run.
+    Uses the exact connected-component pixel masks regenerated by
+    regenerate_discovery_masks.py when available; falls back to the filled
+    bounding-box approximation otherwise (counted and reported, since the
+    rectangle fallback inflates foreground and corrupts training labels).
+    Only background pixels (value 0) are overwritten so SAM proposals that
+    survived triage are never displaced.
     """
+    global _BBOX_FALLBACKS
+    exact = _load_discovery_masks(frame_id) if frame_id else None
+    H, W = ann.shape[:2]
+    if exact is not None:
+        index_map_full = np.array(Image.fromarray(exact[0]).resize((W, H), Image.NEAREST))
+
     for obj in discovered:
         if confirmed_only and not obj.get("confirmed"):
             continue
-        x1, y1, x2, y2 = obj["bbox_orig"]
         class_id = obj["class_id"]
-        region = ann[y1:y2, x1:x2]
-        region[region == 0] = class_id
+        idx = exact[1].get(tuple(obj["bbox_384"])) if exact is not None else None
+        if idx is not None:
+            region_mask = (index_map_full == idx) & (ann == 0)
+            ann[region_mask] = class_id
+        else:
+            _BBOX_FALLBACKS += 1
+            x1, y1, x2, y2 = obj["bbox_orig"]
+            region = ann[y1:y2, x1:x2]
+            region[region == 0] = class_id
 
 
 def _write_annotation(
@@ -177,7 +301,8 @@ def _write_annotation(
             ann[p.pixel_mask] = 0
 
     if discovered:
-        _add_discoveries(ann, discovered, confirmed_only=discovery_confirmed_only)
+        _add_discoveries(ann, discovered, confirmed_only=discovery_confirmed_only,
+                         frame_id=frame_id)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     Image.fromarray(ann.astype(np.uint8)).save(out_dir / f"{frame_id}.png")
@@ -204,6 +329,11 @@ def main():
                         help="Add ALL Swin-detected discovery candidates, skipping VLM confirmation "
                              "(ablation: isolates value of VLM confirmation in discovery)")
     parser.add_argument("--hpc", action="store_true", help="Use HPC data paths")
+    parser.add_argument("--compare-to", default=None, choices=list(VARIANTS),
+                        help="Also compute this baseline variant and print per-class "
+                             "decision transitions (e.g. masks rescued from rejection)")
+    parser.add_argument("--stats-only", action="store_true",
+                        help="Skip annotation PNG writing — print decision statistics only")
     parser.add_argument("--list-variants", action="store_true", help="List available variants and exit")
     args = parser.parse_args()
 
@@ -247,6 +377,10 @@ def main():
         print(f"Output  : {out_dir}")
 
         totals: dict[str, int] = {}
+        base_fn = VARIANTS[args.compare_to][0] if args.compare_to else None
+        # (baseline_decision, variant_decision) → class_name → count
+        transitions: dict[tuple, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        transition_pixels: dict[tuple, int] = defaultdict(int)
 
         for rf in tqdm(result_files, unit="frame", desc=variant_name):
             data = json.loads(rf.read_text())
@@ -257,16 +391,39 @@ def main():
                 decision = fn(mask, swin_q=args.swin_threshold, swin_skip=args.swin_skip)
                 decisions[mask["mask_id"]] = decision
                 totals[decision] = totals.get(decision, 0) + 1
+                if base_fn is not None:
+                    base = base_fn(mask, swin_q=args.swin_threshold, swin_skip=args.swin_skip)
+                    if base != decision:
+                        key = (base, decision)
+                        transitions[key][mask["class_name"]] += 1
+                        transition_pixels[key] += mask["pixel_count"]
 
-            discovered = data.get("discovered", []) if use_discovery else None
-            _write_annotation(frame_id, decisions, out_dir,
-                              discovered=discovered,
-                              discovery_confirmed_only=discovery_confirmed_only)
+            if not args.stats_only:
+                discovered = data.get("discovered", []) if use_discovery else None
+                _write_annotation(frame_id, decisions, out_dir,
+                                  discovered=discovered,
+                                  discovery_confirmed_only=discovery_confirmed_only)
 
         total = sum(totals.values())
         for k, v in sorted(totals.items()):
             if v:
                 print(f"  {k:15s}: {v:4d}  ({100*v/total:.0f}%)")
+
+        if transitions:
+            print(f"\n  Decision changes vs '{args.compare_to}':")
+            for (base, new), by_class in sorted(transitions.items()):
+                n = sum(by_class.values())
+                per_class = ", ".join(f"{c}: {v}" for c, v in sorted(by_class.items(), key=lambda kv: -kv[1]))
+                print(f"    {base} → {new}: {n} masks, {transition_pixels[(base, new)]:,} px  ({per_class})")
+        elif args.compare_to:
+            print(f"\n  No decision changes vs '{args.compare_to}'.")
+
+    if use_discovery:
+        if _BBOX_FALLBACKS:
+            print(f"\nWARNING: {_BBOX_FALLBACKS} discovery objects painted as bounding-box "
+                  f"rectangles (no exact mask found — run regenerate_discovery_masks.py).")
+        else:
+            print("\nAll discovery objects painted with exact connected-component masks.")
 
     print(f"\nDone. {len(result_files)} frames × {len(variants_to_run)} variants.")
 

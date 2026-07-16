@@ -2,7 +2,7 @@
 
 Implementation for the paper:
 
-> Concordance-Based Pseudo-Label Triage via Domain-Adapted Segmentation and Vision–Language Models for Autonomous Driving  
+> Deterministic Swin-Guided Multi-Signal Triage for Refining SAM Pseudo-Labels  
 > Toomas Tahves, Mauro Bellone, Raivo Sell
 
 | Resource | Link |

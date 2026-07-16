@@ -8,5 +8,7 @@ paper/*.out
 paper/*.pdf
 paper/*.bbl
 paper/*.blg
+paper/*.fls
+paper/*.fdb_latexmk
 qualitative_candidates/
 
