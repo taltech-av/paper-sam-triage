@@ -2,42 +2,66 @@
 """
 Score the pipeline's agents against human verdicts from the visin labeling platform.
 
-Input is a job export (CSV, long format: one row per user per mask) plus the
-`.sidecar.json` that `make_label_bundle.py` wrote next to the uploaded zip. The
-platform's export carries only id/class/verdict, so every agent signal comes from
-the sidecar, rejoined on (frame, mask id).
+Input is the export of the single `verify` job — CSV, long format, one row per
+labeler per mask. That is the only required input: label-service carries every
+field the bundle put in `<frame>.masks.json` back out as a `mask_<field>` column,
+so a verdict arrives with its own provenance attached and nothing has to be
+re-joined against the uploaded zip.
 
-The sidecar describes the whole uploaded corpus while a job covers a slice of it,
-so most sidecar masks having no verdict is normal — they belong to masks this job
-never asked about. It is what makes the population counts below trustworthy: they
-are the real totals, not the sample's.
+The human was never asked which run produced what. Attribution is done here: the
+export says what each run decided about each mask, so a human "this one is wrong"
+lands on whichever run kept it, and a human "this one is fine" lands on whichever
+run threw it away. One pass of labeling, both runs scored.
 
-  --job triage     Replaces Table agent_performance's proxy reference. That table
-                   scores each agent against *Swin quality*, so it measures
-                   agreement between two agents, not accuracy: it cannot say
-                   whether Qwen's 95.5% recall means Qwen is right or that Swin
-                   and Qwen are wrong together. Here the reference is human, so
-                   Swin is scored on the same footing as the VLMs, and the masks
-                   where the two runs' triage disagrees are adjudicated.
+Population totals — what a measured rate scales to — come from the job's manifest
+(`--manifest`, the platform's third export format), which pairs each field value
+with how many masks the bundle holds against how many the job asked about. Pass
+it whenever the job sampled rather than covering everything; without it the
+per-stratum precisions are still reported, just not extrapolated.
 
-  --job discovery  Precision per confirmation stratum, and the estimate that
-                   follows from it: how many of the 45,882 candidates LLaVA
-                   confirmed and the 9,878 Qwen confirmed are real objects.
-                   The downstream mIoU comparison cannot answer this, because the
-                   curated reference is itself SAM-derived and cannot credit a
-                   genuinely recovered object (see the paper's Evaluation
-                   Protocol); a human verdict on the candidate itself can.
+The job holds two kinds of region, split apart by `mask_source` and reported
+separately:
+
+  sam          Are the SAM masks the pipeline triaged actually correct? Replaces
+               Table agent_performance's proxy reference. That table scores each
+               agent against *Swin quality*, so it measures agreement between two
+               agents, not accuracy: it cannot say whether Qwen's 95.5% recall
+               means Qwen is right or that Swin and Qwen are wrong together. Here
+               the reference is human, so Swin is scored on the same footing as
+               the VLMs, and the masks where the two runs' triage disagrees are
+               adjudicated.
+
+  discovery    Precision per confirmation stratum, and the estimate that follows
+               from it: how many of the 45,882 candidates LLaVA confirmed and the
+               9,878 Qwen confirmed are real objects. The downstream mIoU
+               comparison cannot answer this, because the curated reference is
+               itself SAM-derived and cannot credit a genuinely recovered object
+               (see the paper's Evaluation Protocol); a human verdict on the
+               candidate itself can.
+
+               Reported per `kind`, never pooled across it. Roughly two thirds of
+               candidates are *fringe* — the rim left over on an object SAM had
+               already segmented — and only a *standalone* candidate is an object
+               the pipeline would otherwise have missed. A pooled precision would
+               read as recall gain while being mostly boundary growth, so the two
+               get separate tables and separate extrapolations.
+
+A mask_toggle labeler clicks only what is wrong, but the export is still
+exhaustive: label-service writes one row per mask per answer and reads a mask's
+verdict as `incorrect` iff the labeler clicked it (`exportService.ts`,
+`maskVerdict`). So silence in the *workbench* is already resolved into `correct`
+in the *export*. A row with no labeler on it is the other case the export
+distinguishes — a task nobody has reached yet — and those are counted as pending
+rather than scored.
 
 All confidence intervals resample *frames*, not masks: masks in one frame share a
 scene, an exposure and a labeler's calibration, so a per-mask bootstrap would
-treat ~21 correlated judgements as independent and report intervals that are far
+treat ~35 correlated judgements as independent and report intervals that are far
 too tight.
 
 Usage:
-    python analyze_human_verification.py --job triage \\
-        --export triage_export.csv --sidecar /path/to/triage.sidecar.json
-    python analyze_human_verification.py --job discovery \\
-        --export discovery_export.csv --sidecar /path/to/discovery.sidecar.json \\
+    python analyze_human_verification.py --export verify_export.csv \\
+        --manifest job-<id>.manifest.json \\
         --latex-out paper/tables/human_discovery.tex
 """
 
@@ -57,18 +81,70 @@ CORRECT, INCORRECT = "correct", "incorrect"
 # --------------------------------------------------------------------------
 
 
-def load_verdicts(path: Path) -> dict[tuple[str, int], dict[str, str]]:
-    """(frame_id, mask_id) -> {labeler email: verdict}."""
-    verdicts: dict[tuple[str, int], dict[str, str]] = defaultdict(dict)
+def scalar(text: str):
+    """CSV is all strings; put the bundle's own types back."""
+    if text in ("true", "True"):
+        return True
+    if text in ("false", "False"):
+        return False
+    for cast in (int, float):
+        try:
+            return cast(text)
+        except ValueError:
+            pass
+    return text
+
+
+def load_masks(path: Path) -> tuple[list[dict], dict]:
+    """
+    One entry per mask, carrying its bundle metadata and every labeler's verdict.
+
+    The export is long — one row per labeler per mask — so rows are folded back
+    into masks here. `mask_<field>` columns are the bundle's own metadata coming
+    home; the prefix exists so a mask field named `stratum` cannot collide with
+    the task-level column of the same name, and it is stripped again here.
+
+    Masks nobody has judged yet keep an empty `labelers` and are reported as
+    pending: label-service emits a row for an unanswered task precisely so the
+    denominator survives, and silently dropping them would report progress as
+    completeness.
+    """
+    masks: dict[tuple[str, int], dict] = {}
+    stats = Counter()
     with path.open(newline="") as handle:
-        for row in csv.DictReader(handle):
-            if "maskId" not in row:
-                raise SystemExit("Export has no maskId column — this is a single_choice job export")
-            frame_id = Path(row["frame"]).stem
-            verdicts[(frame_id, int(row["maskId"]))][row["userEmail"]] = row["verdict"]
-    if not verdicts:
-        raise SystemExit(f"No verdict rows in {path}")
-    return verdicts
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or "maskId" not in reader.fieldnames:
+            raise SystemExit(f"{path} has no maskId column — this is a single_choice job export")
+        for row in reader:
+            key = (Path(row["frame"]).stem, int(row["maskId"]))
+            if key not in masks:
+                masks[key] = {
+                    "frame_id": key[0],
+                    "id": key[1],
+                    "class": row.get("class"),
+                    "labelers": {},
+                    **{
+                        field.removeprefix("mask_"): scalar(value)
+                        for field, value in row.items()
+                        if field.startswith("mask_") and value != ""
+                    },
+                }
+            if row.get("userEmail"):
+                masks[key]["labelers"][row["userEmail"]] = row["verdict"]
+    if not masks:
+        raise SystemExit(f"No mask rows in {path}")
+
+    rows = []
+    for mask in masks.values():
+        if not mask["labelers"]:
+            stats["pending"] += 1
+            continue
+        verdict = consensus(mask["labelers"])
+        stats["tied" if verdict is None else "scored"] += 1
+        rows.append({**mask, "human": verdict})
+    if not rows:
+        raise SystemExit("Every mask in the export is still unanswered")
+    return rows, stats
 
 
 def consensus(labels: dict[str, str]) -> str | None:
@@ -79,32 +155,34 @@ def consensus(labels: dict[str, str]) -> str | None:
     return counts[0][0]
 
 
-def join(sidecar: dict, verdicts: dict) -> tuple[list[dict], dict]:
-    """
-    Sidecar masks with a human verdict attached, plus join diagnostics.
+def run_tags(rows: list[dict]) -> list[str]:
+    """The VLM runs the bundle shipped decisions for, read off the columns.
 
-    Masks whose labelers split evenly keep `human=None` rather than being
-    dropped here: they carry no reference verdict, but they are exactly the
-    masks inter-labeler agreement has to see, and silently discarding them
-    would report perfect agreement by construction.
+    Every SAM mask carries a `triage_<tag>` per run, so the run names are in the
+    export rather than needing to be told to this script — and a bundle built
+    with a third run is picked up without a flag.
     """
-    rows, stats = [], Counter()
-    for frame_id, frame in sidecar["frames"].items():
-        for mask in frame["masks"]:
-            labels = verdicts.get((frame_id, mask["id"]))
-            if not labels:
-                stats["unlabeled"] += 1
-                continue
-            verdict = consensus(labels)
-            stats["tied" if verdict is None else "scored"] += 1
-            rows.append({**mask, "frame_id": frame_id, "frame_stratum": frame["stratum"],
-                         "human": verdict, "labelers": labels})
-    labeled_keys = {key for key in verdicts}
-    sidecar_keys = {(f, m["id"]) for f, frame in sidecar["frames"].items() for m in frame["masks"]}
-    stats["exported_not_in_sidecar"] = len(labeled_keys - sidecar_keys)
-    if not rows:
-        raise SystemExit("No mask matched between export and sidecar — mismatched job/bundle?")
-    return rows, stats
+    return sorted({
+        field.removeprefix("triage_") for row in rows for field in row if field.startswith("triage_")
+    })
+
+
+def stratum_population(manifest: dict | None) -> dict[str, int]:
+    """
+    Bundle-wide candidate count per confirmation stratum, for extrapolation.
+
+    The manifest tallies each field independently, so it holds a stratum total
+    and a kind total but not the joint. That is enough here only because the
+    bundle ships one kind of candidate (`make_label_bundle.py --candidates`), and
+    SAM masks carry no `stratum` at all — so the stratum marginal *is* the
+    per-kind total. A bundle carrying both kinds makes that false, and this
+    returns nothing rather than a number that would overstate every stratum.
+    """
+    if not manifest or "masks" not in manifest:
+        return {}
+    if len(manifest["masks"].get("kind", {})) > 1:
+        return {}
+    return {value: counts["bundle"] for value, counts in manifest["masks"].get("stratum", {}).items()}
 
 
 # --------------------------------------------------------------------------
@@ -203,8 +281,7 @@ def signals(tags: list[str]) -> dict[str, callable]:
     return checks
 
 
-def report_triage(all_rows: list[dict], sidecar: dict, args) -> None:
-    tags = sidecar["tags"]
+def report_triage(all_rows: list[dict], tags: list[str], args) -> None:
     rows = [row for row in all_rows if row["human"]]
     human_correct = rate(rows, lambda row: row["human"] == CORRECT)
     print(f"\n{len(rows)} masks over {len({row['frame_id'] for row in rows})} frames; "
@@ -242,12 +319,32 @@ def report_triage(all_rows: list[dict], sidecar: dict, args) -> None:
             share = f"{100 * agreed / len(contested):.1f}%" if contested else "--"
             print(f"  {tag} sides with the human on {agreed}/{len(contested)} ({share})")
 
+    # Where a human "wrong" landed. The labeler judged the mask, not the run, so
+    # both error directions are attributed here rather than asked about there.
+    print("\nAttribution of the human's verdicts, per run:")
+    incorrect = [row for row in rows if row["human"] == INCORRECT]
+    print(f"  {len(incorrect)} masks the human called incorrect")
+    for tag in tags:
+        retained = [row for row in incorrect if row[f"triage_{tag}"] != "reject"]
+        by_class = Counter(row["class"] for row in retained)
+        share = f"{100 * len(retained) / len(incorrect):.1f}%" if incorrect else "--"
+        print(f"    {tag}: kept {len(retained)} of them ({share}) {dict(by_class)}")
     for tag in tags:
         wrongly_rejected = [row for row in rows
                             if row[f"triage_{tag}"] == "reject" and row["human"] == CORRECT]
         by_class = Counter(row["class"] for row in wrongly_rejected)
-        print(f"\n{tag}: {len(wrongly_rejected)} masks rejected that the human kept "
-              f"({dict(by_class)})")
+        print(f"    {tag}: rejected {len(wrongly_rejected)} masks the human kept ({dict(by_class)})")
+
+    if len(tags) == 2:
+        a, b = tags
+        only = {tag: [row for row in incorrect
+                      if (row[f"triage_{tag}"] != "reject") and (row[f"triage_{other}"] == "reject")]
+                for tag, other in ((a, b), (b, a))}
+        both = [row for row in incorrect
+                if row[f"triage_{a}"] != "reject" and row[f"triage_{b}"] != "reject"]
+        neither = len(incorrect) - len(both) - sum(len(value) for value in only.values())
+        print(f"  Of those: {len(both)} survived both runs, {neither} caught by both, "
+              + ", ".join(f"{len(value)} let through by {tag} alone" for tag, value in only.items()))
 
 
 # --------------------------------------------------------------------------
@@ -255,10 +352,19 @@ def report_triage(all_rows: list[dict], sidecar: dict, args) -> None:
 # --------------------------------------------------------------------------
 
 
-def report_discovery(all_rows: list[dict], sidecar: dict, args) -> list[dict]:
-    tags = sidecar["tags"]
+def report_discovery(all_rows: list[dict], tags: list[str], population: dict[str, int],
+                     reason_no_population: str, args) -> list[dict]:
+    """
+    Precision per confirmation stratum, within one kind of candidate.
+
+    Kind is not a nuisance variable to pool over. A *standalone* candidate is a
+    region SAM missed entirely, so a human "yes" means an object was recovered; a
+    *fringe* is the leftover rim of an object SAM already segmented, so a human
+    "yes" means the boundary grew. Pooling them reports the second as if it were
+    the first, and since fringes outnumber standalones roughly 2:1 the pooled
+    number would be mostly boundary growth wearing the label of recall.
+    """
     rows = [row for row in all_rows if row["human"]]
-    population = sidecar.get("population", {})
     print(f"\n{len(rows)} candidates over {len({row['frame_id'] for row in rows})} frames")
 
     kappa = cohen_kappa(all_rows)
@@ -290,7 +396,7 @@ def report_discovery(all_rows: list[dict], sidecar: dict, args) -> list[dict]:
         subset = [row for row in rows if row["stratum"] in ("both", f"{tag}_only")]
         sizes = [entry["population"] for entry in parts]
         if not subset or any(size is None for size in sizes):
-            print(f"  {tag}: population sizes missing from sidecar")
+            print(f"  {tag}: not extrapolated — {reason_no_population}")
             continue
         total = sum(sizes)
         # Strata were sampled to equal size, not proportionally, so a pooled rate
@@ -306,16 +412,23 @@ def report_discovery(all_rows: list[dict], sidecar: dict, args) -> list[dict]:
     return table
 
 
-def write_latex(table: list[dict], sidecar: dict, path: Path) -> None:
+def write_latex(table: list[dict], path: Path, kind: str) -> None:
+    scope = {
+        "standalone": "Candidates are restricted to those covering image regions SAM segmented "
+                      "no object in, so a positive verdict is an object recovered rather than a "
+                      "boundary extended.",
+        "fringe": "Candidates here abut an existing SAM mask, so a positive verdict extends an "
+                  "object's boundary rather than recovering a missed object.",
+    }[kind]
     lines = [
         r"\begin{table}[t]",
         r"\centering",
-        r"\caption{Human verification of Swin-proposed discovery candidates. "
-        r"Candidates are sampled uniformly within each confirmation stratum; "
-        r"precision is the share a human labeler judged a real object of the proposed class. "
+        r"\caption{Human verification of Swin-proposed discovery candidates. " + scope + " "
+        r"Precision is the share a human labeler judged a real object of the proposed class; "
+        r"labelers saw each candidate's segmented pixels, not its bounding box. "
         r"95\% CIs resample frames with replacement. "
         r"``Real'' extrapolates the stratum's precision to its full population.}",
-        r"\label{tab:human_discovery}",
+        rf"\label{{tab:human_discovery_{kind}}}",
         r"\begin{tabular}{lrrr}",
         r"\toprule",
         r"\textbf{Stratum} & \textbf{Labeled} & \textbf{Precision (\%)} & \textbf{Real / total} \\",
@@ -337,28 +450,59 @@ def write_latex(table: list[dict], sidecar: dict, path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--export", type=Path, required=True, help="job export CSV from label-front")
-    parser.add_argument("--sidecar", type=Path, required=True, help=".sidecar.json from make_label_bundle.py")
-    parser.add_argument("--job", choices=["triage", "discovery"], help="default: whatever the sidecar says")
+    parser.add_argument("--manifest", type=Path,
+                        help="job manifest JSON from label-front — bundle-wide totals, for extrapolation")
+    parser.add_argument("--only", choices=["sam", "discovery"], help="report one source only")
     parser.add_argument("--iterations", type=int, default=10000, help="bootstrap resamples")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--latex-out", type=Path, help="discovery: write the paper table here")
+    parser.add_argument("--latex-out", type=Path, help="write the discovery paper table here")
+    parser.add_argument("--latex-kind", choices=["standalone", "fringe"], default="standalone",
+                        help="which kind of candidate the paper table reports (default: standalone)")
     args = parser.parse_args()
 
-    sidecar = json.loads(args.sidecar.read_text())
-    job = args.job or sidecar["job"]
-    rows, stats = join(sidecar, load_verdicts(args.export))
+    manifest = json.loads(args.manifest.read_text()) if args.manifest else None
+    rows, stats = load_masks(args.export)
+    tags = run_tags(rows)
 
-    print(f"Job: {job}   tags: {', '.join(sidecar['tags'])}")
-    print(f"Joined {stats['scored']} masks "
-          f"({stats['unlabeled']} in the bundle but not in this job, {stats['tied']} tied, "
-          f"{stats['exported_not_in_sidecar']} exported rows with no sidecar entry)")
+    if manifest:
+        job = manifest["job"]
+        print(f"Job: {job['name']}   K={job['redundancy']}   "
+              f"{manifest['progress']['completed']}/{manifest['progress']['tasks']} frames complete")
+    print(f"Runs: {', '.join(tags) or '(none named in the export)'}")
+    print(f"Scored {stats['scored']} masks ({stats['tied']} tied, {stats['pending']} not yet answered)")
 
-    if job == "triage":
-        report_triage(rows, sidecar, args)
-    else:
-        table = report_discovery(rows, sidecar, args)
-        if args.latex_out:
-            write_latex(table, sidecar, args.latex_out)
+    # One job, two questions: `source` says which masks answer which, so the
+    # split happens here rather than in the labeling.
+    by_source = defaultdict(list)
+    for row in rows:
+        by_source[row.get("source", "sam")].append(row)
+
+    if args.only is None or args.only == "sam":
+        if by_source["sam"]:
+            print("\n" + "=" * 70 + "\nSAM proposals — triage accuracy\n" + "=" * 70)
+            report_triage(by_source["sam"], tags, args)
+    if args.only is None or args.only == "discovery":
+        # Reported one kind at a time: a standalone find and a boundary fringe
+        # are different claims and do not average into anything meaningful.
+        by_kind = defaultdict(list)
+        for row in by_source["discovery"]:
+            by_kind[row.get("kind", "standalone")].append(row)
+        # A stratum total covers every candidate in the bundle, so it is only the
+        # total *for a kind* when the bundle carries one kind. With both present
+        # the totals are refused rather than misattributed — build the bundle
+        # with `--candidates standalone` to get the extrapolation back.
+        population = stratum_population(manifest) if len(by_kind) == 1 else {}
+        reason = (
+            "pass --manifest for the bundle-wide totals" if not manifest
+            else "the job mixes standalone and fringe candidates, whose stratum totals the manifest "
+                 "does not separate" if len(by_kind) > 1
+            else "the manifest carries no stratum totals"
+        )
+        for kind, rows_of_kind in sorted(by_kind.items()):
+            print("\n" + "=" * 70 + f"\nDiscovery candidates ({kind}) — precision per stratum\n" + "=" * 70)
+            table = report_discovery(rows_of_kind, tags, population, reason, args)
+            if args.latex_out and kind == args.latex_kind:
+                write_latex(table, args.latex_out, kind)
 
 
 if __name__ == "__main__":
