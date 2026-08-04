@@ -12,6 +12,10 @@
 
 PIPELINE_DIR="/gpfs/mariana/smbhome/totahv/paper-vlm-annotation-pipeline"
 MODEL="qwen2.5vl:72b"
+# Fresh tag: the 2026-06 run under `qwen2.5vl_72b` is kept as-is — it is the
+# record of the serving fault, not a run to be topped up. Do not point this at
+# the old tag; --resume would skip its 2,972 corrupted frames as "done".
+TAG="qwen2.5vl_72b_v2"
 
 export PATH="$HOME/bin:$PATH"
 export OLLAMA_HOST="0.0.0.0:11435"
@@ -28,29 +32,23 @@ echo "[$(date)] Ollama version: $(ollama --version)"
 # ── Venv ───────────────────────────────────
 source "$PIPELINE_DIR/venv/bin/activate"
 
-# ── Ollama server ─────────────────────────────────────────────────────────────
-echo "[$(date)] Starting Ollama..."
-ollama serve &
-SERVER_PID=$!
-until curl -sf "http://localhost:11435" > /dev/null; do sleep 2; done
-echo "[$(date)] Ollama ready."
+cd "$PIPELINE_DIR"
+source "$PIPELINE_DIR/slurms/_pipeline_common.sh"
 
 # ── Pull model if not already local ──────────────────────────────────────────
+start_ollama
 if ! ollama list | grep -q "$MODEL"; then
     echo "[$(date)] Pulling $MODEL (~45 GB)..."
     ollama pull "$MODEL"
 fi
+stop_ollama
 
-echo "[$(date)] Warming up $MODEL..."
-ollama run "$MODEL" <<< "warmup"
-
-# ── Run pipeline ──────────────────────────────────────────────────────────────
+# ── Run pipeline (restarts Ollama on a health abort, resumes each time) ──────
 # Quality agent: Swin segmentation model (default). Pass --no-swin to use VLM instead.
 # Workers: 4 (set by --hpc via config.WORKERS).
-# Discovery: add --discovery to enable missed-object recovery (extra VLM calls per frame).
-echo "[$(date)] Starting pipeline..."
-cd "$PIPELINE_DIR"
-python process_frames.py --model "$MODEL" --resume --hpc
+run_pipeline_with_restarts
+status=$?
 
-echo "[$(date)] Pipeline complete."
-kill $SERVER_PID
+stop_ollama
+echo "[$(date)] Job finished with status $status."
+exit $status

@@ -36,6 +36,7 @@ from PIL import Image
 from tqdm import tqdm
 
 import config
+from agents.base import AgentOutcome
 from agents.bbox_agent import BBoxAgent
 from agents.consistency_agent import ConsistencyAgent
 from agents.correction_agent import CorrectionAgent
@@ -51,6 +52,7 @@ from core.triage import TRIAGE_REJECT as _TRIAGE_REJECT
 from output.results_writer import write_frame_result, write_summary
 from visualize_results import visualize_frame
 from vlm.client import VLMClient
+from vlm.health import EXIT_HEALTH_ABORT, VLMHealthError, VLMHealthMonitor, probe
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -76,13 +78,13 @@ def check_ollama(model: str) -> None:
         sys.exit(f"  ERROR: cannot reach Ollama at {config.OLLAMA_URL} — {e}")
 
 
-def build_agents(vlm: VLMClient, swin_agent=None) -> dict:
+def build_agents(vlm: VLMClient, swin_agent=None, monitor=None) -> dict:
     return {
-        "bbox": BBoxAgent(vlm),
-        "quality": swin_agent if swin_agent is not None else QualityAgent(vlm),
+        "bbox": BBoxAgent(vlm, monitor),
+        "quality": swin_agent if swin_agent is not None else QualityAgent(vlm, monitor),
         "consistency": ConsistencyAgent(),       # deterministic, no VLM
-        "correction": CorrectionAgent(vlm),
-        "failure_mode": FailureModeAgent(vlm),   # diagnostic only
+        "correction": CorrectionAgent(vlm, monitor),
+        "failure_mode": FailureModeAgent(vlm, monitor),   # diagnostic only
     }
 
 
@@ -121,13 +123,34 @@ def _timed(fn) -> tuple:
     return out, round(time.perf_counter() - t, 4)
 
 
+def _outcome(agent, bundle: Bundle) -> AgentOutcome:
+    """
+    AgentOutcome for any agent, VLM-backed or deterministic.
+
+    ConsistencyAgent and SwingQualityAgent compute their verdicts without a
+    model call, so they have no run_outcome() and can never parse-fail.
+    """
+    run_outcome = getattr(agent, "run_outcome", None)
+    if run_outcome is not None:
+        return run_outcome(bundle)
+    return AgentOutcome(agent.run(bundle))
+
+
 def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
                 swin_score: float | None = None) -> TriageResult:
     """Run the full agent cascade on one mask — all agents always called."""
     elapsed: dict[str, float] = {}
     vlm_calls = 0
+    failures: dict[str, dict] = {}
 
-    consistency_out, elapsed["consistency"] = _timed(lambda: agents["consistency"].run(bundle))
+    def verdict(name: str, outcome: AgentOutcome) -> str:
+        """Unwrap an outcome, recording the substitution when there was one."""
+        if outcome.parse_failed:
+            failures[name] = {"degenerate": outcome.degenerate, "raw": outcome.raw_sample}
+        return outcome.value
+
+    consistency_out, elapsed["consistency"] = _timed(
+        lambda: verdict("consistency", _outcome(agents["consistency"], bundle)))
 
     from agents.swin_quality_agent import SwingQualityAgent
     swin_bypass = False
@@ -135,14 +158,17 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
         cls_id = bundle.metadata.get("class_id")
         swin_bypass = swin_score >= config.swin_skip_threshold(cls_id)
 
-    bbox_out, elapsed["bbox"] = _timed(lambda: agents["bbox"].run(bundle))
+    bbox_out, elapsed["bbox"] = _timed(
+        lambda: verdict("bbox", _outcome(agents["bbox"], bundle)))
     vlm_calls += 1
 
-    quality_out, elapsed["quality"] = _timed(lambda: agents["quality"].run(bundle))
+    quality_out, elapsed["quality"] = _timed(
+        lambda: verdict("quality", _outcome(agents["quality"], bundle)))
 
     correction_out = None
     if bbox_out == "valid" and quality_out == "good" and consistency_out == "fail":
-        correction_out, elapsed["correction"] = _timed(lambda: agents["correction"].run(bundle))
+        correction_out, elapsed["correction"] = _timed(
+            lambda: verdict("correction", _outcome(agents["correction"], bundle)))
         vlm_calls += 1
 
     result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
@@ -153,9 +179,10 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
 
     if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
         result.failure_mode_out, elapsed["failure_mode"] = _timed(
-            lambda: agents["failure_mode"].run(bundle))
+            lambda: verdict("failure_mode", _outcome(agents["failure_mode"], bundle)))
         vlm_calls += 1
 
+    result.parse_failed = failures or None
     return result
 
 
@@ -236,9 +263,12 @@ def process_frame(
     diagnose: bool,
     swin_agent=None,
     discovery_agent=None,
+    monitor: VLMHealthMonitor | None = None,
 ) -> dict:
     # Build per-frame agents so BBoxAgent._expected_class is thread-local.
-    agents = build_agents(vlm, swin_agent=swin_agent)
+    # The monitor is deliberately shared — degradation is a property of the
+    # server, so every worker has to count into the same window.
+    agents = build_agents(vlm, swin_agent=swin_agent, monitor=monitor)
 
     ann_path = config.ANNOTATION_SAM_DIR / f"{frame_id}.png"
     cam_path = config.CAMERA_DIR / f"{frame_id}.png"
@@ -341,6 +371,11 @@ def process_frame(
         "n_vlm_calls": total_vlm_calls,
         "n_swin_bypass": n_bypass,
         "workers": config.WORKERS,
+        # Per-frame degradation counts, so a corrupted stretch is visible in the
+        # results themselves rather than only in the run's stdout.
+        "n_parse_failed": sum(1 for r in triage_results if r.degraded),
+        "n_discovery_parse_failed": sum(1 for d in discovered if d.parse_failed),
+        **({"vlm_health": monitor.snapshot().as_dict()} if monitor else {}),
     }
 
     write_annotation(frame_id, original_ann, proposals, triage_results, ann_out_dir, discovered)
@@ -364,6 +399,11 @@ def process_frame(
         mask_elapsed=mask_elapsed, run_info=run_info,
     )
     visualize_frame(frame_id, config.VIS_DIR)
+
+    # Checked after the frame is safely on disk: a tripped monitor aborts the
+    # run, and everything completed so far stays resumable.
+    if monitor is not None:
+        monitor.check()
     return result
 
 
@@ -441,13 +481,27 @@ def main():
         _ = swin_agent.model  # eagerly load so workers share one copy
         print("Swin: model ready")
 
+    # One monitor for the whole run: the fault this guards against is a
+    # property of the server, not of any frame.
+    monitor = VLMHealthMonitor()
+    if not args.mock:
+        healthy, raw = probe(vlm)
+        if not healthy:
+            # Same exit status as an in-run abort: both mean "the server needs
+            # reloading", and a batch loop should treat them identically.
+            print(f"  ERROR: VLM canary failed before the run started — "
+                  f"response was {raw!r}. Reload the model and retry.")
+            sys.exit(EXIT_HEALTH_ABORT)
+        print(f"  VLM canary OK ({raw.strip()[:40]!r})")
+
     discovery_agent = None
     if swin_agent is not None and not args.no_discovery:
         from agents.discovery_agent import DiscoveryAgent
-        discovery_agent = DiscoveryAgent(vlm)
+        discovery_agent = DiscoveryAgent(vlm, monitor=monitor)
         print(f"Discovery: enabled (min_pixels={config.DISCOVERY_MIN_PIXELS})")
 
     frame_records = []
+    aborted = None
     with tqdm(total=len(frame_ids), desc="Frames", unit="frame") as bar:
         workers = args.workers if args.workers is not None else config.WORKERS
         print(f"Workers: {workers}")
@@ -455,7 +509,7 @@ def main():
             futures = {
                 executor.submit(
                     process_frame, fid, vlm, ann_out_dir, results_out_dir,
-                    args.diagnose, swin_agent, discovery_agent,
+                    args.diagnose, swin_agent, discovery_agent, monitor,
                 ): fid
                 for fid in frame_ids
             }
@@ -464,10 +518,33 @@ def main():
                     record = fut.result()
                     if record:
                         frame_records.append(record)
+                except VLMHealthError as e:
+                    # Not a per-frame error: every remaining frame would be
+                    # written with substituted defaults. Stop the run instead.
+                    aborted = str(e)
+                    for pending in futures:
+                        pending.cancel()
+                    break
                 except Exception as e:
                     tqdm.write(f"  ERROR {futures[fut]}: {e}")
                 finally:
                     bar.update(1)
+
+    health = monitor.snapshot()
+    if health.degenerate:
+        print(f"\n  WARNING: {health.degenerate}/{health.calls} VLM responses "
+              f"({health.window_rate:.1%}) carried no usable content. Masks and "
+              f"candidates affected are flagged `parse_failed` in the results.")
+
+    if aborted:
+        # Deliberately no write_summary: the in-flight workers raised after
+        # writing their frames, so frame_records is short of what is on disk and
+        # summarising it would overwrite a good summary with an empty one.
+        on_disk = len(list(results_out_dir.glob("*.json")))
+        print(f"\nABORTED.\n  {aborted}\n"
+              f"  {on_disk} frame results are on disk and intact — reload the model, "
+              f"then rerun the same command with --resume to continue.")
+        sys.exit(EXIT_HEALTH_ABORT)
 
     write_summary(frame_records, results_out_dir)
     print(f"\nDone. {len(frame_records)} frames processed.")

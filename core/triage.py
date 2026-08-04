@@ -24,6 +24,17 @@ class TriageResult:
     agent_elapsed: Optional[dict] = None
     # Number of actual VLM HTTP calls made for this mask
     vlm_calls: int = 0
+    # Agents whose verdict above is a SAFE_DEFAULT substitution rather than a
+    # judgement: {agent_name: {"degenerate": bool, "raw": str | None}}. The
+    # decision is still computed from the substituted values — triage has to
+    # produce something — but a mask with any entry here should be excluded
+    # from an analysis rather than counted as its default verdict.
+    parse_failed: Optional[dict] = None
+
+    @property
+    def degraded(self) -> bool:
+        """True when any agent's verdict on this mask is a substituted default."""
+        return bool(self.parse_failed)
 
 
 def triage(

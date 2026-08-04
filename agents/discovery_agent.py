@@ -9,6 +9,7 @@ confirmation gate only.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -17,6 +18,7 @@ from PIL import Image
 import config
 from agents.swin_quality_agent import SWIN_SIZE
 from vlm.client import VLMClient
+from vlm.health import VLMHealthMonitor, looks_degenerate
 
 # Swin output class → pipeline class_id (None = needs VLM disambiguation)
 SWIN_TO_PIPELINE: dict[int, int | None] = {
@@ -54,6 +56,14 @@ _VALID_RESPONSES: dict[int, set[str]] = {
     3: {"cyclist", "pedestrian"},
 }
 
+# Everything the prompt actually offers, confirmations and rejections alike.
+# An answer outside this set is one the model never mapped onto the question —
+# distinct from a degenerate response (no content at all) and from a clean
+# "other" (a real negative). All three used to collapse into confirmed=False.
+_ANSWERABLE: dict[int, set[str]] = {
+    cls: valid | {"other"} for cls, valid in _VALID_RESPONSES.items()
+}
+
 
 @dataclass
 class DiscoveredMask:
@@ -66,6 +76,13 @@ class DiscoveredMask:
     pixel_mask_384: np.ndarray # bool [384, 384] — used by annotation writer
     vlm_response: str
     confirmed: bool
+    # `confirmed` is False both when the model said "other" and when it said
+    # nothing usable, and those are opposite facts: one is evidence the
+    # candidate is not an object, the other is no evidence at all. Without this
+    # flag a degraded server reads as a model rejecting every candidate — which
+    # is how the 2026-06 qwen run reported 17% confirmation against llava's 69%.
+    parse_failed: bool = False
+    degenerate: bool = False
 
 
 class DiscoveryAgent:
@@ -81,10 +98,12 @@ class DiscoveryAgent:
         vlm: VLMClient,
         min_pixels: int = config.DISCOVERY_MIN_PIXELS,
         max_candidates: int = config.DISCOVERY_MAX_CANDIDATES,
+        monitor: Optional[VLMHealthMonitor] = None,
     ):
         self.vlm = vlm
         self.min_pixels = min_pixels
         self.max_candidates = max_candidates
+        self.monitor = monitor
 
     def run(
         self,
@@ -125,14 +144,21 @@ class DiscoveryAgent:
             for attempt in range(config.VLM_MAX_RETRIES + 1):
                 try:
                     response = self.vlm.query([crop], _CONFIRM_PROMPTS[swin_cls]).strip().lower().rstrip(".")
+                    if self.monitor is not None:
+                        self.monitor.record(response)
                     break
                 except Exception:
+                    if self.monitor is not None:
+                        self.monitor.record(None)
                     if attempt == config.VLM_MAX_RETRIES:
                         response = None
-            if response is None:
-                continue
 
-            confirmed = response in _VALID_RESPONSES[swin_cls]
+            # A candidate whose call failed is kept, not dropped. Dropping it
+            # silently shrinks the denominator of any recall claim; keeping it
+            # flagged lets the analysis exclude it explicitly.
+            degenerate = looks_degenerate(response)
+            parse_failed = degenerate or response not in _ANSWERABLE[swin_cls]
+            confirmed = (not degenerate) and response in _VALID_RESPONSES[swin_cls]
 
             if confirmed and swin_cls == 3:
                 class_id = 4 if response == "cyclist" else 5
@@ -151,6 +177,8 @@ class DiscoveryAgent:
                 pixel_mask_384=comp_mask,
                 vlm_response=response,
                 confirmed=confirmed,
+                parse_failed=parse_failed,
+                degenerate=degenerate,
             ))
 
         return results

@@ -41,6 +41,10 @@ def write_frame_result(
                 "swin_skip_threshold": config.swin_skip_threshold(proposal.class_id),
             },
             "triage": result.decision,
+            # Present only when at least one agent fell back to SAFE_DEFAULT.
+            # `triage` above was computed from those substituted values, so a
+            # mask carrying this key is not evidence about the mask.
+            "parse_failed": result.parse_failed or None,
             "timing": {
                 "elapsed_seconds": mask_elapsed[i] if mask_elapsed else None,
                 "agent_seconds": result.agent_elapsed,
@@ -62,6 +66,11 @@ def write_frame_result(
                 "pixel_count_384": disc.pixel_count_384,
                 "vlm_response": disc.vlm_response,
                 "confirmed": disc.confirmed,
+                # confirmed=False means "the model said no" only when both of
+                # these are False. Otherwise it means "no usable answer", which
+                # must not be counted as a negative in a recall denominator.
+                "parse_failed": disc.parse_failed,
+                "degenerate": disc.degenerate,
             })
 
     frame_record = {
