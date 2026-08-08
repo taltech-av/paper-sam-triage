@@ -9,9 +9,17 @@ Sync from HPC then run (replace TAG with the model tag, e.g. qwen2.5vl_72b):
     rsync -avP totahv@base.hpc.taltech.ee:/gpfs/mariana/smbhome/totahv/zod_temp/vlm/TAG/results/ \\
         /run/media/tom/ml/zod_temp/vlm/TAG/results/
     python analyze_results.py --tag TAG
+
+The report opens with RUN INTEGRITY, which must be read before any other
+number is quoted. The 2026-06 qwen run looked entirely normal in every other
+section while 72% of its verdicts were serving-fault defaults (see
+vlm/health.py). Frames processed during such a window are identified by the
+corruption oracle and can be excluded with --exclude-corrupt or listed for
+deletion-and-resume with --list-corrupt.
 """
 
 import argparse
+import datetime
 import json
 import statistics
 from collections import defaultdict
@@ -31,6 +39,148 @@ def load_results(results_dir: Path) -> list[dict]:
     if not files:
         raise SystemExit(f"No results found in {results_dir}")
     return [json.loads(f.read_text()) for f in files]
+
+
+# ── Run integrity ─────────────────────────────────────────────────────────────
+#
+# Two independent oracles for "this frame was processed against a degraded
+# server". Runs predating vlm/health.py only have the first.
+#
+#   1. Stored responses. `discovered[].vlm_response` holds the raw answer; a
+#      degraded server wrote characters with no alphanumeric content. Works
+#      retroactively on any run, but sees discovery calls only — bbox raw
+#      responses were never stored before the health fix.
+#   2. Recorded flags. `discovered[].degenerate` and the per-agent
+#      `masks[].parse_failed[agent].degenerate` are written by the pipeline
+#      itself and cover every call, mask calls included.
+
+def looks_degenerate(raw) -> bool:
+    """A response carrying no usable content. Mirrors vlm.health.looks_degenerate."""
+    stripped = (raw or "").strip()
+    return bool(stripped) and not any(ch.isalnum() for ch in stripped)
+
+
+# Agents whose output core.triage.decide() actually reads. A degenerate answer
+# from one of these changes the stored verdict; failure_mode is recorded but
+# never consulted, so degrading it costs nothing.
+VERDICT_AGENTS = {"bbox", "quality", "consistency", "correction"}
+
+
+def frame_integrity(rec: dict) -> dict:
+    """Classify one frame and count its degraded agent outcomes."""
+    disc = rec.get("discovered", [])
+    # Oracle 1 — retroactive, works on pre-health-fix runs.
+    stored = [looks_degenerate(d.get("vlm_response")) for d in disc]
+    # Oracle 2 — recorded by the pipeline, covers mask calls too.
+    flagged_disc = sum(1 for d in disc if d.get("degenerate"))
+
+    fail_by_agent, degen_by_agent = defaultdict(int), defaultdict(int)
+    masks_degraded = 0
+    for m in rec.get("masks", []):
+        # Pre-health-fix runs have no parse_failed field at all; post-fix it is
+        # {agent: {"degenerate": bool, "raw": str}} or None.
+        hit = False
+        for agent, info in (m.get("parse_failed") or {}).items():
+            fail_by_agent[agent] += 1
+            if info.get("degenerate"):
+                degen_by_agent[agent] += 1
+                hit |= agent in VERDICT_AGENTS
+        masks_degraded += hit
+
+    if not disc:
+        status = "no-discovery"
+    elif all(stored):
+        status = "corrupt"
+    elif any(stored):
+        status = "partial"
+    else:
+        status = "clean"
+
+    n_disc_degenerate = max(sum(stored), flagged_disc)
+
+    return dict(
+        frame_id=rec.get("frame_id", "?"),
+        status=status,
+        # Discovery is lost for the whole frame; the frame has to be redone.
+        unusable=status in ("corrupt", "partial"),
+        # Any degenerate response at all — a frame worth redoing, but its other
+        # masks are still sound.
+        touched=status in ("corrupt", "partial") or flagged_disc > 0 or masks_degraded > 0,
+        n_masks=len(rec.get("masks", [])),
+        masks_degraded=masks_degraded,
+        n_disc=len(disc),
+        n_disc_degenerate=n_disc_degenerate,
+        fail_by_agent=dict(fail_by_agent),
+        degen_by_agent=dict(degen_by_agent),
+        timestamp=rec.get("run_info", {}).get("timestamp", ""),
+        health=rec.get("run_info", {}).get("vlm_health"),
+    )
+
+
+def health_segments(frames: list[dict]) -> list[dict]:
+    """
+    Split frames into pipeline-process runs.
+
+    `vlm_health.vlm_calls` counts from process start, so a resume after a health
+    abort resets it. The counter is not monotonic within a segment — several
+    frame workers snapshot it concurrently — so only a collapse well below the
+    running peak marks a genuine restart.
+    """
+    rows = sorted((f for f in frames if f["health"]), key=lambda f: f["timestamp"])
+    segments, peak = [], 0
+    for f in rows:
+        calls = f["health"].get("vlm_calls", 0)
+        if peak > 200 and calls < peak * 0.5:
+            segments.append([])
+            peak = 0
+        elif not segments:
+            segments.append([])
+        peak = max(peak, calls)
+        segments[-1].append(f)
+
+    out = []
+    for seg in segments:
+        out.append(dict(
+            n_frames=len(seg),
+            start=seg[0]["timestamp"],
+            end=seg[-1]["timestamp"],
+            calls=max(f["health"].get("vlm_calls", 0) for f in seg),
+            degenerate=max(f["health"].get("degenerate_responses", 0) for f in seg),
+        ))
+    return out
+
+
+def integrity(records: list[dict]) -> dict:
+    frames = [frame_integrity(r) for r in records]
+    status = defaultdict(int)
+    fail_by_agent, degen_by_agent = defaultdict(int), defaultdict(int)
+    by_day = defaultdict(lambda: [0, 0])
+
+    for f in frames:
+        status[f["status"]] += 1
+        day = f["timestamp"][:10]
+        by_day[day][0] += 1
+        by_day[day][1] += f["touched"]
+        for a, n in f["fail_by_agent"].items():
+            fail_by_agent[a] += n
+        for a, n in f["degen_by_agent"].items():
+            degen_by_agent[a] += n
+
+    return dict(
+        frames=frames,
+        status=dict(status),
+        unusable_frames=[f for f in frames if f["unusable"]],
+        touched_frames=[f for f in frames if f["touched"]],
+        fail_by_agent=dict(fail_by_agent),
+        degen_by_agent=dict(degen_by_agent),
+        by_day=dict(sorted(by_day.items())),
+        segments=health_segments(frames),
+        has_telemetry=any(f["health"] for f in frames),
+        masks_total=sum(f["n_masks"] for f in frames),
+        masks_degraded=sum(f["masks_degraded"] for f in frames),
+        disc_candidates=sum(f["n_disc"] for f in frames),
+        disc_degenerate=sum(f["n_disc_degenerate"] for f in frames),
+    )
 
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
@@ -151,6 +301,125 @@ def bar(n, total, width=30):
 
 
 # ── Report ────────────────────────────────────────────────────────────────────
+
+def print_integrity(g: dict, masks_total: int) -> None:
+    """Section 0 — whether the numbers below can be trusted at all."""
+    F = len(g["frames"])
+    st = g["status"]
+    unusable = len(g["unusable_frames"])
+    touched = len(g["touched_frames"])
+
+    print()
+    print(SEP2)
+    print(f"  RUN INTEGRITY — {F} frames")
+    print(SEP2)
+
+    if not g["has_telemetry"]:
+        print("  ⚠ No `vlm_health` in run_info: this run predates the health")
+        print("    monitor and was blind to serving faults while it ran. Only the")
+        print("    stored-response oracle applies, and it sees discovery calls only —")
+        print("    bbox degradation on these runs is not directly observable.\n")
+
+    print(f"  {'clean':16s} {st.get('clean',0):5d}  {pct_plain(st.get('clean',0),F)}")
+    print(f"  {'corrupt':16s} {st.get('corrupt',0):5d}  {pct_plain(st.get('corrupt',0),F)}"
+          f"   all discovery responses degenerate")
+    print(f"  {'partial':16s} {st.get('partial',0):5d}  {pct_plain(st.get('partial',0),F)}"
+          f"   some degenerate")
+    print(f"  {'no-discovery':16s} {st.get('no-discovery',0):5d}  {pct_plain(st.get('no-discovery',0),F)}"
+          f"   oracle 1 cannot classify")
+    print(f"  {'─ unusable ─':16s} {unusable:5d}  {pct_plain(unusable,F)}"
+          f"   corrupt + partial: discovery lost, redo these")
+    print(f"  {'─ touched ─':16s} {touched:5d}  {pct_plain(touched,F)}"
+          f"   ≥1 degenerate response anywhere in the frame")
+
+    # Frames touched overstates the damage: one bad call in a 30-mask frame
+    # taints one verdict, not the frame. Rate the contamination on the units
+    # that actually enter the paper's numbers.
+    print(f"\n  CONTAMINATED UNITS  (verdict is a degenerate-driven SAFE_DEFAULT)")
+    print(SEP)
+    if g["has_telemetry"]:
+        print(f"  masks               {g['masks_degraded']:6d}/{g['masks_total']:<6d} "
+              f"{pct_plain(g['masks_degraded'], g['masks_total']):>7}   "
+              f"a verdict agent answered degenerately")
+    else:
+        # No per-agent flags were recorded, so mask contamination is unknown —
+        # not zero. Reporting 0% here is how the 2026-06 run looked healthy.
+        print(f"  masks                    ?/{g['masks_total']:<6d} {'n/a':>7}   "
+              f"not recorded before the health fix")
+    if g["disc_candidates"]:
+        print(f"  discovery candidates{g['disc_degenerate']:6d}/{g['disc_candidates']:<6d} "
+              f"{pct_plain(g['disc_degenerate'], g['disc_candidates']):>7}   "
+              f"silently counted as 'not confirmed'")
+
+    # Fallback accounting. `parse_failed` means every attempt was unusable and
+    # the verdict is SAFE_DEFAULT. Splitting it by cause separates a broken
+    # server (degenerate) from the model genuinely answering UNCLEAR — the
+    # latter is a real, reportable property of the prompt, not a fault.
+    if g["fail_by_agent"]:
+        print(f"\n  SAFE_DEFAULT SUBSTITUTIONS  (verdict is a default, not an answer)")
+        print(SEP)
+        print(f"  {'agent':14s} {'total':>7} {'of masks':>9} {'degenerate':>11} {'UNCLEAR etc':>12}")
+        for agent, n in sorted(g["fail_by_agent"].items(), key=lambda x: -x[1]):
+            deg = g["degen_by_agent"].get(agent, 0)
+            print(f"  {agent:14s} {n:7d} {pct_plain(n,masks_total):>9} {deg:11d} {n-deg:12d}")
+        unclear_bbox = g["fail_by_agent"].get("bbox", 0) - g["degen_by_agent"].get("bbox", 0)
+        if unclear_bbox:
+            print(f"\n  {unclear_bbox} masks ({pct_plain(unclear_bbox, masks_total)}) were scored"
+                  f" `valid` because the BBox")
+            print(f"  agent answered UNCLEAR and the parser discards it (SAFE_DEFAULT).")
+            print(f"  This is prompt/parser behaviour, not a fault — report it as a")
+            print(f"  limitation; the valid rate below is inflated by exactly this much.")
+
+    if g["segments"]:
+        print(f"\n  VLM SERVER HEALTH  ({len(g['segments'])} pipeline "
+              f"process{'es' if len(g['segments'])>1 else ''})")
+        print(SEP)
+        print("  A new segment means the process restarted — a health abort plus")
+        print("  --resume, or a walltime kill.")
+        for i, s in enumerate(g["segments"], 1):
+            rate = s["degenerate"] / s["calls"] if s["calls"] else 0
+            print(f"  {i}. {s['start'][5:16].replace('T',' ')} → {s['end'][5:16].replace('T',' ')}  "
+                  f"{s['n_frames']:5d} frames  "
+                  f"{s['degenerate']:5d}/{s['calls']:6d} degenerate ({rate:.2%})")
+        tot_c = sum(s["calls"] for s in g["segments"])
+        tot_d = sum(s["degenerate"] for s in g["segments"])
+        print(f"     {'total':>29}  {sum(s['n_frames'] for s in g['segments']):5d} frames  "
+              f"{tot_d:5d}/{tot_c:6d} degenerate ({tot_d/tot_c if tot_c else 0:.2%})")
+
+    if len(g["by_day"]) > 1:
+        print(f"\n  PER-DAY DEGRADATION")
+        print(SEP)
+        for day, (n, bad) in g["by_day"].items():
+            print(f"  {day}  {n:5d} frames  {bad:5d} degraded  {pct_plain(bad,n):>7}  {bar(bad,n,24)}")
+
+    # Rate the run on contaminated units, not frames touched.
+    mask_frac = (g["masks_degraded"] / g["masks_total"]
+                 if g["masks_total"] and g["has_telemetry"] else 0)
+    disc_frac = g["disc_degenerate"] / g["disc_candidates"] if g["disc_candidates"] else 0
+    worst = max(mask_frac, disc_frac, unusable / F if F else 0)
+    mask_txt = f"masks {mask_frac:.1%}" if g["has_telemetry"] else "masks n/a"
+
+    print(f"\n  VERDICT: ", end="")
+    if worst == 0:
+        print("CLEAN — no degenerate responses anywhere in this run.")
+    elif worst < 0.10:
+        print(f"USABLE WITH CLEANUP — contamination {worst:.1%} "
+              f"({mask_txt}, discovery {disc_frac:.1%}).")
+        print(f"           Rates below shift by well under a point, so the")
+        print(f"           qualitative picture stands. But {unusable} frame(s) lost")
+        print(f"           discovery outright and {touched} carry a defaulted verdict;")
+        print(f"           redoing all {touched} is cheap and leaves a pristine run:")
+        print(f"             python analyze_results.py --tag TAG --list-corrupt \\")
+        print(f"               | sed 's|.*|<results>/&.json|' | xargs rm -f")
+        print(f"           then rerun process_frames.py --resume.")
+    else:
+        print(f"DO NOT QUOTE — contamination is {worst:.1%} "
+              f"({mask_txt}, discovery {disc_frac:.1%}).")
+        print("           The verdict rates below are substantially SAFE_DEFAULTs,")
+        print("           not model behaviour. Rerun, or use --exclude-corrupt to")
+        print("           describe the surviving clean subset.")
+    print(SEP2)
+
 
 def print_report(r: dict) -> None:
     N  = r["masks_total"]
@@ -378,6 +647,14 @@ def main():
     parser.add_argument("--hpc", action="store_true", help="Use HPC data paths")
     parser.add_argument("--tag", default=None,
                         help="run tag to analyze (vlm/<tag>/results/). Must match --tag used in process_frames.py")
+    parser.add_argument("--exclude-corrupt", action="store_true",
+                        help="drop frames with any degenerate response before aggregating, "
+                             "so the report describes model behaviour rather than SAFE_DEFAULTs")
+    parser.add_argument("--list-corrupt", action="store_true",
+                        help="print ids of frames carrying any degenerate response and exit — "
+                             "feed to rm, then rerun process_frames.py with --resume")
+    parser.add_argument("--integrity-only", action="store_true",
+                        help="print the RUN INTEGRITY section and stop")
     args = parser.parse_args()
     if args.hpc:
         config.use_hpc()
@@ -385,6 +662,27 @@ def main():
         config.set_run_tag(args.tag)
 
     records = load_results(config.RESULTS_DIR)
+    g = integrity(records)
+
+    if args.list_corrupt:
+        for f in sorted(g["touched_frames"], key=lambda f: f["frame_id"]):
+            print(f["frame_id"])
+        return
+
+    # Integrity first: every rate below is only meaningful once the degraded
+    # fraction is known.
+    print_integrity(g, sum(len(r["masks"]) for r in records))
+    if args.integrity_only:
+        return
+
+    if args.exclude_corrupt:
+        bad = {f["frame_id"] for f in g["touched_frames"]}
+        records = [r for r in records if r.get("frame_id") not in bad]
+        print(f"\n  --exclude-corrupt: dropped {len(bad)} degraded frame(s); "
+              f"{len(records)} remain.")
+        if not records:
+            raise SystemExit("No clean frames left to analyze.")
+
     r = aggregate(records)
     print_report(r)
 

@@ -49,8 +49,10 @@ We evaluate with two open-weight VLMs (LLaVA-1.6-34B and Qwen2.5-VL-72B) using i
 
 All variants are evaluated against a single human-curated reference on a common test set, with paired bootstrap confidence intervals.
 Under this fixed-prompt, zero-shot setting, the domain-adapted Swin subsumes the VLM: Swin-only filtering reaches 47.6 mIoU, significantly exceeding both the curated SAM baseline trained on the clean partition (44.4 mIoU; $\Delta{=}{+}3.3$, 95\% CI $[+1.5,+5.5]$) and unfiltered SAM pseudo-labels (43.2 mIoU), while adding VLM verdicts to the triage rule yields no significant further gain.
-Swin-driven discovery recovers thousands of objects SAM missed; VLM-confirmed discovery still trails Swin-only filtering (best case 45.1 mIoU), but requiring agreement between both VLMs before adding a candidate recovers annotation quality to parity with the curated baseline (44.7 vs.\ 44.4), whereas a single VLM's large, unselective confirmed set approaches the cost of adding every unconfirmed candidate.
-Applying the same prompts to Qwen2.5-VL-72B reveals that prompt-response calibration, not model capability, determines annotation behaviour: Qwen accepts 93.3\% of masks as valid versus LLaVA's 62.1\%, yet confirms only 17.8\% of discovery candidates versus 82.5\%, and these behavioural differences propagate directly to downstream training.
+Swin-driven discovery recovers thousands of objects SAM missed, but VLM-confirmed discovery still trails Swin-only filtering, and its downstream cost tracks the volume and precision of the confirmed candidate set rather than mask geometry.
+Applying the same prompts to Qwen2.5-VL-72B shows that fixed prompts do not transfer neutrally, and that the failure is prompt-specific rather than a uniform model disposition: Qwen returns \texttt{valid} on 71.8\% of mask crops against LLaVA's 62.1\%, while on discovery the two models agree closely overall (82.5\% vs.\ 83.9\% confirmation of the same candidates) yet diverge sharply on the one prompt covering the safety-critical human classes (43.5\% vs.\ 84.9\%).
+We further report an operational failure mode that annotation pipelines rarely document: a VLM serving fault returned content-free responses for 72\% of one model's frames, which the pipeline silently replaced with safe defaults, manufacturing a large and entirely plausible cross-model finding that did not survive instrumented re-annotation.
+We describe the response-level monitoring that detects it, and separate every verdict rate from its safe-default share so that a defaulted verdict is never counted as a judgement.
 All decisions trace to explicit outputs with no learned fusion weights, enabling full reproducibility without re-running VLM inference.
 \end{abstract}
 
@@ -78,8 +80,9 @@ Downstream impact is measured by training CLFTv2 \cite{gu2024clft}, a camera–L
 Our contributions are:
 \begin{itemize}
     \item \textbf{a controlled comparison} of domain-adapted segmentation and zero-shot VLM verification under identical fixed prompts, showing when each signal is reliable and when it is not,
-    \item \textbf{a prompt-portability analysis} demonstrating that VLM acceptance and discovery rates vary dramatically across models under the same prompts, and that this behavioural calibration, not general model capability, determines downstream annotation quality,
-    \item \textbf{a Swin-driven discovery mechanism} that recovers objects missed by SAM, together with a downstream analysis showing that discovery quality tracks candidate-set volume and precision, and that requiring two-VLM agreement before confirming a candidate recovers annotation quality to parity with a curated baseline,
+    \item \textbf{a prompt-portability analysis} showing that identical prompts elicit measurably different acceptance and discovery behaviour from two open VLMs, that the divergence is concentrated in individual prompts rather than spread uniformly across a model's outputs, and that it is largest on the prompt covering the safety-critical human classes,
+    \item \textbf{a Swin-driven discovery mechanism} that recovers objects missed by SAM, together with a downstream analysis showing that discovery quality tracks candidate-set volume and precision rather than mask geometry,
+    \item \textbf{a reliability analysis of VLM-as-judge annotation}, reporting a serving fault that silently converted 72\,\% of one model's verdicts into safe defaults and produced a spurious cross-model result, the response-level monitoring that detects such faults while a run is in progress, and a reporting discipline that separates a substituted default from an answer,
     \item and \textbf{a downstream study} under a single curated evaluation reference with paired bootstrap confidence intervals, quantifying how each annotation variant affects camera–LiDAR fusion performance beyond mask agreement.
 \end{itemize}
 
@@ -179,8 +182,12 @@ Because Swin achieves higher mIoU on large objects than on cyclists and pedestri
 For ablation studies, all agents are called on every mask to enable direct signal comparison; bypass thresholds ($0.70$ for large classes, $0.40$ for small classes) are used only for deployment efficiency and are not applied during evaluation.
 
 \paragraph{Correction Agent}
-Called only on the refine path (\texttt{bbox=valid}, $\alpha{\geq}\tau_q$, \texttt{consistency=fail}). 
+Called only on the refine path (\texttt{bbox=valid}, $\alpha{\geq}\tau_q$, \texttt{consistency=fail}).
 Determines whether the mask can be improved and proposes a single refinement step (\texttt{refine} or \texttt{no\_refine}).
+This is the one agent whose prompt failed to transfer outright.
+Qwen2.5-VL-72B returned an empty response to all 1{,}205 correction calls in the paired frame set, so every one fell back to \texttt{no\_refine} and the refine path never fired, whereas LLaVA answered 1{,}068 of 1{,}075 calls with \texttt{refine}.
+The behaviour reproduces in the discarded campaign as well as the instrumented re-run, so it is a property of this model and prompt rather than the serving fault of Section~\ref{par:serving}.
+It is reported here as a null result and no refine-path claim is made for Qwen; the prompt differs from the others in requesting a judgement about a hypothetical corrective action rather than a description of visible content, which is a plausible but untested explanation.
 
 \paragraph{Failure-Mode Agent}
 Classifies the dominant error type (\texttt{boundary\_drift}, \texttt{hallucination}, \texttt{occlusion\_miss}, \texttt{fragmentation}). 
@@ -255,14 +262,66 @@ All annotation variant ablations are computed offline from stored agent outputs 
 All numeric values cited in the text are from LLaVA-1.6-34B unless otherwise noted.
 
 \paragraph{Computational Cost}
-Table~\ref{tab:timing} reports inference time extracted from per-mask and per-frame timings logged during annotation.
-The BBox agent dominates cost: a single crop verification call takes 3.56s (LLaVA) or 14.15s (Qwen) on average, and is issued once per mask, so per-mask latency scales almost linearly with model size.
+Table~\ref{tab:timing} reports inference time extracted from per-mask and per-frame timings logged during annotation, on the paired frame set of Section~\ref{par:comparability}.
+The BBox agent dominates cost: a single crop verification call takes 3.54s (LLaVA) or 11.63s (Qwen) on average, and is issued once per mask, so per-mask latency scales almost linearly with model size.
 The Correction agent, triggered only for the 1.5--1.8\% of masks that fail the LiDAR consistency check, adds a comparable per-call cost but touches few masks overall.
 The Swin Quality Agent runs once per frame at negligible cost ($<$0.01s/mask), confirming that domain-adapted CNN triage is essentially free relative to VLM inference.
-Annotating the full flagged partition (4{,}135 frames, 90{,}761 masks) on a single A100 with 4 concurrent frame workers took approximately 33 GPU-hours with LLaVA-1.6-34B versus 123 GPU-hours with Qwen2.5-VL-72B, a $3.7\times$ cost increase; the larger model's triage verdicts are no more selective (Table~\ref{tab:agent_behavior}) and yield no downstream triage advantage (Table~\ref{tab:ablation}), although its conservative discovery confirmation does produce the better discovery variants.
+Annotating the paired 3{,}535 frames (73{,}708 masks) on a single A100 with 4 concurrent frame workers took 108.6 GPU-hours with LLaVA-1.6-34B versus 356.2 GPU-hours with Qwen2.5-VL-72B, a $3.3\times$ cost increase, or 27.1 against 89.0 wall-clock hours.
+The Qwen figure is a deployed rather than a fault-free cost: it includes the retry and reload traffic generated by the 17 monitor-triggered restarts described above.
+Against that, the larger model's triage verdicts are less selective, not more (Table~\ref{tab:agent_behavior}), and its confirmation rate on the same discovery candidates is marginally lower overall while differing sharply on one prompt, so the $3.3\times$ premium buys a different annotation distribution rather than a better one on any axis we measure.
 Estimated VRAM footprint (quantized weights plus a bounded KV cache at the deployed parallelism) is $\sim$22GB for LLaVA-1.6-34B versus $\sim$51GB for Qwen2.5-VL-72B, comfortably within the single A100-80GB used for both models.
 
 \input{tables/timing}
+
+\subsection{Serving Reliability and Response-Level Monitoring}
+\label{par:serving}
+An initial Qwen2.5-VL-72B campaign had to be discarded and re-run, and the reason is worth reporting rather than hiding, because the failure was silent by construction and any VLM-as-judge pipeline is exposed to it.
+A few hours after each model load, the serving runtime stopped emitting a stop token and answered every request with a short run of non-alphanumeric characters, for 14 to 44 hours at a stretch, four times over six days.
+No component raised an error.
+Each agent treated the unreadable reply as a parse failure, exhausted its retries, and substituted its \textsc{safe\_default} --- which for the BBox agent is \texttt{valid} and for discovery is \emph{not confirmed} --- so a total serving outage was recorded as a decisive, and opposite, judgement on each of the two tasks.
+The run completed without warning signs, and 2{,}972 of 4{,}135 frames (72\,\%) carried defaulted verdicts.
+The resulting numbers were not obviously wrong: they read as a model that accepts almost every mask while confirming almost no discovery candidate, which is a coherent and publishable behavioural profile. It was an artifact of the defaults, and it did not reproduce.
+
+The degenerate responses are stored verbatim under \texttt{discovered[].vlm\_response}, which makes the fault diagnosable after the fact: a frame whose discovery replies contain no alphanumeric character at all was processed inside an outage window.
+We now also detect it while a run is in progress.
+Every response is classified usable or degenerate on arrival; a sliding window over the last 200 calls aborts the run when the degenerate fraction exceeds 50\,\% over at least 60 samples, rather than writing defaulted verdicts; a startup canary probe rejects an already-degraded server; and the batch script treats the resulting distinct exit status as a signal to reload the model and resume from the frames on disk, while still failing immediately on any other error, which a reload cannot fix.
+Replaying the recorded incident detects 43{,}784 corrupted responses with no misses and no false positives.
+Detection also changes the cost profile: an episode is now caught within roughly 60 calls instead of persisting for a day, and the re-run absorbed 17 automatic reload-and-resume cycles, with 5.25\,\% of its 132{,}390 calls degenerate but only 3.7\,\% of masks left carrying a defaulted verdict.
+Per-agent parse outcomes are recorded per mask from this point on, which is what allows Tables~\ref{tab:agent_behavior} and~\ref{tab:agent_performance} to report the safe-default share alongside every rate.
+The practical lesson is that a VLM judge must be monitored at the level of individual response content, since availability checks, exit statuses, and aggregate verdict distributions all reported this run as healthy.
+
+\subsection{Cross-Model Comparability}
+\label{par:comparability}
+Because only the Qwen campaign was re-run under the monitor, the two runs are instrumented asymmetrically, and the cross-model comparison is constructed to be valid despite that rather than assuming it away.
+Three measures are taken.
+
+First, all cross-model numbers are computed on the frames \emph{both} runs completed (3{,}535 frames, 73{,}708 masks), not on each run's full output.
+The comparison is paired at mask level, and we verify that the two runs saw identical VLM-independent inputs on it: the same mask identifiers, bit-identical Swin agreement and LiDAR support values, and the same number of Swin-proposed discovery candidates in every frame.
+Any verdict difference is therefore attributable to the VLM alone.
+Triage outcomes are recomputed offline under the current deterministic rule for both runs, so a rule revision between campaigns cannot masquerade as a model difference.
+
+Second, BBox verdict rates are reported \emph{as-recorded}, meaning that masks whose verdict is a substituted default are included, because that is the verdict the pipeline acted on and wrote into the annotations that train the downstream models.
+For Qwen we additionally report the default share (13.3\,\% of masks) and the rate over answered masks only.
+The equivalent decomposition is not available for LLaVA: raw BBox responses were never stored, only the parsed verdict, so its defaulted masks are indistinguishable offline from confidently valid ones and cannot be recovered without re-running the model.
+This does not, however, leave the comparison undetermined.
+Since the BBox \textsc{safe\_default} is \texttt{valid}, every defaulted mask is counted as valid, so any run's valid rate is a weighted mean of its answered rate and 100\,\%, giving
+\begin{equation}
+\text{valid}_{\text{answered}} \;\leq\; \text{valid}_{\text{as-recorded}}
+\label{eq:default_bound}
+\end{equation}
+for \emph{any} run, whatever its default share.
+LLaVA's answered-only valid rate is thus at most its as-recorded 62.1\,\%, while Qwen's is measured at 67.5\,\%.
+Qwen is therefore the more permissive model on masks both models actually answered, by at least 5.3 points, and LLaVA's unmeasured defaults can only widen that gap, never close it.
+The direction of the effect is settled without re-running LLaVA; only its magnitude remains a lower bound.
+
+Third, discovery is compared on ground that is fully measured on both sides.
+Both runs store each discovery response verbatim, so we re-derive the outcome for both with a single parser and separate four cases the stored \texttt{confirmed} flag collapses into one: the model named a class the prompt offered, the model declined (\texttt{other}, a genuine negative), the model replied outside the offered vocabulary, or no content was returned at all.
+Confirmation rates are then taken over answered candidates only.
+Pooling those cases is precisely what made a degraded server read as a sceptical model, and separating them also distinguishes model-side non-answering (out-of-vocabulary text: 1.8\,\% for LLaVA, 0.0\,\% for Qwen) from server-side non-answering (content-free replies: 0.0\,\% and 2.9\,\%), which have opposite causes and opposite interpretations.
+
+One limitation is not removable by any of this and is stated plainly: the Qwen re-run was still in progress at the time of writing, at 3{,}535 of 4{,}135 frames, and 750 of its completed frames still carry at least one defaulted verdict pending a targeted redo.
+The rates below are therefore provisional, and the downstream results in Table~\ref{tab:ablation} that depend on Qwen annotations predate the re-run entirely (see Section~\ref{sec:experiments}).
+
 
 \subsection{Downstream Segmentation}
 
@@ -279,6 +338,14 @@ One caveat is inherent to this protocol: the curated reference is itself SAM-der
 Discovery-related results below should be read with this conservative bias in mind.
 We additionally include a modality ablation (RGB, LiDAR, Fusion) on the Swin + disc.\ variant to quantify each sensor stream's contribution independently of annotation quality.
 
+\paragraph{Superseded Qwen-dependent variants}
+The annotation variants that consume Qwen verdicts were trained before the serving fault of Section~\ref{par:serving} was identified, so their training labels contain the defaulted verdicts rather than the model's judgements.
+Those rows are marked with a dagger in Table~\ref{tab:ablation} and are reported for completeness only; we draw no conclusions from them, and every claim below is stated over the VLM-independent and LLaVA-based variants, which are unaffected.
+Two consequences are worth stating in advance, because they retract results a previous version of this analysis reported.
+First, the two-VLM consensus variants are derived by intersecting the two confirmed sets, so a Qwen set that was suppressed to roughly a quarter of its true size produced a correspondingly small intersection; on the re-run, Qwen confirms 36{,}596 of the same candidates rather than 9{,}878, and the intersection can no longer act as the aggressive precision filter that the earlier consensus result attributed to it.
+Second, any account of Qwen's downstream behaviour resting on selective discovery confirmation is withdrawn, since that selectivity was the artifact itself.
+Retraining these variants on the corrected annotations, and re-deriving the consensus sets from them, is in progress and is the remaining gap in this evaluation.
+
 Table~\ref{tab:ablation} reports vehicle, sign, and combined human-class IoU (cyclist + pedestrian) for all variants.
 Several observations emerge from these results.
 
@@ -287,25 +354,20 @@ Swin-only filtering achieves 47.6 mIoU, the best result of any variant, exceedin
 Annotation volume combined with a domain-adapted quality signal therefore compensates for the label-quality gap of pseudo-labels: filtering alone, with no VLM involvement, converts 4{,}135 flagged frames into better training data than 2{,}319 hand-curated ones.
 
 \textbf{VLM triage adds no significant gain over Swin.}
-Full triage (Swin + VLM + consistency) reaches 44.5 mIoU with LLaVA and 43.9 with Qwen, both \emph{below} Swin-only filtering ($\Delta{=}{-}3.2$, CI $[-5.1,-1.5]$ for LLaVA), and VLM-only triage without the Swin signal is statistically indistinguishable from full triage (LLaVA: 43.7 vs.\ 44.5, $\Delta{=}{+}0.9$, CI $[-1.2,+2.9]$).
+Full triage (Swin + VLM + consistency) reaches 44.5 mIoU with LLaVA, \emph{below} Swin-only filtering ($\Delta{=}{-}3.2$, CI $[-5.1,-1.5]$), and VLM-only triage without the Swin signal is statistically indistinguishable from full triage (LLaVA: 43.7 vs.\ 44.5, $\Delta{=}{+}0.9$, CI $[-1.2,+2.9]$).
 Crop-based VLM rejection removes masks that pixel-level Swin agreement retains, and the removals hurt more than they help under the fixed-prompt configuration studied here.
 
 \textbf{Discovery regions carry a volume-dependent annotation cost, distinct from mask geometry.}
 To separate the effect of mask geometry from candidate volume, we trained each discovery variant under two painting schemes: candidates added as their exact connected-component masks versus as filled bounding boxes.
-Geometry matters only when candidates are unverified: the no-VLM variant collapses under bounding-box painting (21.1 vs.\ 39.5 mIoU with exact masks) while the VLM-confirmed variants are nearly unchanged (Qwen: 46.0 vs.\ 45.1; LLaVA: 41.0 vs.\ 40.5), so coarse-mask noise scales with the number of unconfirmed candidates and contributes little once a VLM has trimmed the set.
+Geometry matters only when candidates are unverified: the no-VLM variant collapses under bounding-box painting (21.1 vs.\ 39.5 mIoU with exact masks) while the confirmed variant is nearly unchanged (LLaVA: 41.0 vs.\ 40.5), so coarse-mask noise scales with the number of unconfirmed candidates and contributes little once a VLM has trimmed the set.
 All discovery results below use exact connected-component masks.
-Even so, discovery reduces mIoU relative to Swin-only in every configuration: Swin-only (0 regions, 47.6) $>$ Qwen-confirmed (9{,}878 regions, 45.1; $\Delta{=}{+}2.6$, CI $[+1.1,+4.4]$) $>$ LLaVA-confirmed (45{,}882 regions, 40.5; $\Delta{=}{+}7.2$, CI $[+5.6,+9.1]$) $\approx$ unconfirmed (all 55{,}630 candidates, 39.5; $\Delta{=}{+}8.2$, CI $[+6.5,+9.9]$).
-Because the curated evaluation reference is itself SAM-derived, it cannot credit genuine recoveries (see Evaluation Protocol), so part of this cost is an artifact of the reference rather than the annotations; the remainder tracks candidate-set precision, larger, less selective confirmed sets (LLaVA's 45{,}882) approach the unconfirmed case (39.5 vs.\ 40.5, CI $[-0.0,+1.9]$, not clearly separable), while smaller, more selective sets (Qwen's 9{,}878) retain most of Swin-only's advantage.
-
-\textbf{Cross-model consensus recovers discovery to curated-baseline parity.}
-Requiring both VLMs to independently confirm a discovery candidate, the same concordance principle used for triage rejection, yields a smaller set (8{,}703 objects) than either VLM alone and closes most of the gap: Swin filtering with both-confirmed discovery reaches 44.7 mIoU, statistically indistinguishable from the curated baseline (44.4; $\Delta{=}{+}0.3$, CI $[-1.6,+2.0]$) and from Qwen's own selective confirmation (45.1; $\Delta{=}{-}0.4$, CI $[-1.5,+0.6]$), while significantly exceeding LLaVA's confirmed set (40.5; $\Delta{=}{+}4.2$, CI $[+2.4,+5.8]$).
-Agreement between independent VLMs thus functions as a precision filter for discovery candidates, though it remains below Swin-only filtering with no discovery at all (47.6; $\Delta{=}{+}3.0$, CI $[+1.3,+5.1]$).
-Applying the more permissive union-reject triage rule (Section~\ref{sec:methodology} ablations) to the same both-confirmed discovery set instead reaches only 42.6, below either single-VLM triage (LLaVA 44.5, Qwen 43.9), reinforcing that Swin-based filtering, not VLM agreement, is what drives triage quality.
-
-\textbf{Discovery inverts the VLM ranking.}
-Under identical prompts, Qwen confirms far fewer discovery candidates than LLaVA (17.8\% vs.\ 82.5\%, Table~\ref{tab:agent_behavior}), which Section~\ref{sec:experiments} initially suggests is excessive scepticism.
-Downstream, that scepticism is protective: Qwen's Swin + disc.\ variant scores 45.1 versus LLaVA's 40.5 ($\Delta{=}{+}4.6$, CI $[+3.3,+5.8]$).
-Prompt-response calibration thus propagates directly to downstream performance, and the direction of the effect depends on whether the elicited behaviour (acceptance or scepticism) matches the reliability of the candidate stream, not on model capability or recency.
+Even so, discovery reduces mIoU relative to Swin-only: Swin-only (0 regions, 47.6) $>$ LLaVA-confirmed (45{,}882 regions, 40.5; $\Delta{=}{+}7.2$, CI $[+5.6,+9.1]$) $\approx$ unconfirmed (all 55{,}630 candidates, 39.5; $\Delta{=}{+}8.2$, CI $[+6.5,+9.9]$).
+Counts here are over the full flagged partition the downstream models were trained on, and so exceed the paired-subset counts in Table~\ref{tab:agent_behavior}.
+Because the curated evaluation reference is itself SAM-derived, it cannot credit genuine recoveries (see Evaluation Protocol), so part of this cost is an artifact of the reference rather than the annotations.
+The remainder tracks candidate-set precision: LLaVA's confirmed set is large and barely selective, keeping 45{,}882 of 55{,}630 candidates, and it lands statistically alongside the unconfirmed case (39.5 vs.\ 40.5, CI $[-0.0,+1.9]$, not clearly separable), which is the expected result for a confirmation gate that discards under a fifth of what it is shown.
+We previously placed a much more selective confirmed set at the other end of this ordering and reported that it retained most of Swin-only's advantage; that set was the artifact of Section~\ref{par:serving} and the claim is withdrawn.
+On the instrumented re-run Qwen confirms these candidates at a rate close to LLaVA's (Table~\ref{tab:agent_behavior}), so a second model no longer supplies a selective gate at all.
+Testing whether genuine selectivity recovers Swin-only performance therefore requires an explicitly thresholded discovery variant rather than a second VLM, and we identify that as the direct follow-up to this result.
 
 \textbf{The triage limitation fixes show no significant downstream effect at this scale.}
 Section~\ref{sec:experiments} identifies two triage weaknesses from qualitative inspection: unilateral rejection on a bare \texttt{background} verdict, and a LiDAR support threshold that is not class-aware.
@@ -313,39 +375,51 @@ Applying both fixes (\texttt{background\_protected} and \texttt{lidar\_class\_aw
 Retraining LLaVA's Swin + disc.\ variant with the fixed triage rule, holding the discovery set constant, gives 39.1 mIoU versus 40.5 for the unfixed rule ($\Delta{=}{-}1.2$, CI $[-2.3,+0.1]$), not a significant difference.
 The rescued masks are a small fraction of the 90{,}761-mask training set, and their effect may be swamped by the same discovery-volume cost identified above; isolating the triage fix from a no-discovery baseline is left to future work.
 
-\textbf{Rule ablations: concordance protects rare classes at a model-dependent mIoU cost.}
-Rejecting on any single negative signal (disjunctive reject) is not uniformly worse than the concordance rule: with Qwen's permissive verdicts it removes more bad masks and gains mIoU (46.0 vs.\ 43.9), but with LLaVA's selective verdicts it collapses human-class IoU from 38.7 to 26.5, deleting exactly the safety-relevant masks the concordance rule is designed to protect.
-Since which regime a given VLM falls into is not knowable before deployment (Section~\ref{sec:experiments}, prompt sensitivity), we retain concordance as the safe default and report the mIoU cost transparently.
-Uniform versus class-aware Swin thresholds are downstream-indistinguishable (LLaVA: 44.6 vs.\ 44.5; Qwen: 44.2 vs.\ 43.9, all within CI); class-aware thresholds are retained for mask-level recall on cyclists and pedestrians rather than for any downstream gain.
+\textbf{Rule ablations: concordance protects rare classes at an mIoU cost.}
+Rejecting on any single negative signal (disjunctive reject) collapses LLaVA's human-class IoU from 38.7 to 26.5, deleting exactly the safety-relevant masks the concordance rule is designed to protect, at an overall mIoU that is lower than the concordance rule's (42.2 vs.\ 44.5).
+We therefore retain concordance as the safe default and report its mIoU cost transparently.
+Whether a more permissive VLM inverts this trade-off, as the superseded Qwen rows suggested, is exactly the question the retraining above will settle, and we do not claim it here.
+Uniform versus class-aware Swin thresholds are downstream-indistinguishable (LLaVA: 44.6 vs.\ 44.5, within CI); class-aware thresholds are retained for mask-level recall on cyclists and pedestrians rather than for any downstream gain.
 
 \input{tables/ablation}
 
-\textbf{Prompt-response calibration dominates model capability.}
-Table~\ref{tab:agent_behavior} compares per-VLM agent outputs on the same 90{,}761 masks using identical prompts.
-The BBox verdicts diverge sharply: LLaVA returns \texttt{valid} on 62.1\% of crops while Qwen returns \texttt{valid} on 93.3\%, suggesting the fixed forced-choice prompt elicits a near-unconditional acceptance response from Qwen rather than the selective judgement it produces in LLaVA.
-The miscalibration is class-specific: sign rejection drops from 26.6\% to 5.3\% and cyclist rejection from 47.4\% to 8.1\%, so Qwen retains many small-object masks that LLaVA rejects.
-The pattern inverts for discovery: Qwen confirms only 17.8\% of Swin-proposed candidates (9{,}878 objects, 490 human-class) against LLaVA's 82.5\% (45{,}882 objects, 6{,}415 human-class).
-Neither behaviour is uniformly better: Qwen's permissive triage and LLaVA's permissive discovery each admit noise, and as Table~\ref{tab:ablation} shows, the downstream consequences track which candidate stream the permissiveness is applied to, with Qwen's conservative discovery confirmation yielding the higher downstream mIoU.
-These results show that identical prompts can produce qualitatively different annotation behaviours across VLMs, and that downstream outcomes track prompt-response calibration more closely than general model capability.
+\textbf{Fixed prompts do not transfer neutrally, and the divergence is prompt-specific.}
+Table~\ref{tab:agent_behavior} compares per-VLM agent outputs under identical prompts on the paired set of Section~\ref{par:comparability}: 3{,}535 frames and 73{,}708 masks with verified-identical Swin, LiDAR, and candidate inputs.
+
+On mask verification, Qwen is the more permissive model.
+It returns \texttt{valid} on 71.8\% of crops against LLaVA's 62.1\% as-recorded, and by the bound of~\eqref{eq:default_bound} the gap on answered masks is at least 5.3 points in the same direction.
+The divergence is not a uniform shift, however, but a redistribution across classes: relative to LLaVA, Qwen rejects far fewer signs (10.8\% vs.\ 26.7\%) and cyclists (33.8\% vs.\ 48.1\%), yet substantially \emph{more} vehicles (16.2\% vs.\ 5.0\%) and pedestrians (35.1\% vs.\ 17.3\%).
+The two models agree on only 56.8\% of masks, so identical prompts leave them disagreeing on well over four crops in ten.
+Neither ordering is uniformly more selective, which is the practical point: a single aggregate acceptance rate does not predict which classes a model will protect.
+
+On discovery, the two models are close in aggregate and far apart on one prompt.
+Given the same 45{,}669 Swin-proposed candidates, they confirm at nearly the same rate over the candidates they answered, 82.5\% for Qwen against 83.9\% for LLaVA, and Qwen is in fact marginally more permissive on the vehicle (87.5\% vs.\ 83.3\%) and sign (89.1\% vs.\ 84.2\%) prompts.
+The entire divergence sits in the third prompt, the one that must disambiguate a human candidate into cyclist or pedestrian: Qwen confirms 43.5\% of those candidates against LLaVA's 84.9\%, yielding 2{,}497 human objects against 4{,}777 from the identical candidate stream.
+This localisation matters more than a pooled rate would suggest.
+The failing prompt is the only one carrying a three-way discrimination rather than a presence check, and it governs the two classes the pipeline is least able to afford losing.
+A portability check that reports one aggregate confirmation rate per model would have scored these two models as near-equivalent on discovery and missed a 41-point deficit concentrated exactly on cyclists and pedestrians.
+
+We previously reported this comparison as a near-unconditional acceptance rate of 93.3\% paired with a 17.8\% discovery confirmation rate, and read the pattern as a coherent behavioural profile in which permissiveness in triage traded off against scepticism in discovery.
+Both figures were products of the serving fault of Section~\ref{par:serving}, in opposite directions, and neither survived re-annotation.
+The corrected picture is narrower and less tidy: prompts transfer imperfectly, the imperfection is concentrated rather than global, and its sign varies by class and by prompt.
+That the artifact was more interesting than the truth is itself the cautionary result, and it is the reason we now report the safe-default share next to every rate.
 
 \input{tables/agent_behavior}
 
-\textbf{Within-model prompt sensitivity.}
-The cross-model divergence above could in principle reflect stable model dispositions rather than prompt effects.
-A development-stage revision of the prompt set provides a direct within-model test: an earlier Qwen2.5-VL-72B run with the original prompts covers 1{,}000 of the same flagged frames (13{,}612 masks), and all VLM-independent signals are bit-identical across the two runs.
-Table~\ref{tab:prompt_sensitivity} compares the two prompt versions on this overlap subset, with triage outcomes recomputed under the final deterministic rule so that differences reflect prompt and response-protocol changes only.
-The revision, wording intended to improve small-object handling plus a stricter response-parsing protocol, flipped 25.9\% of Qwen's BBox verdicts and raised its valid rate from 64.4\% to 85.2\%; under the original prompts, Qwen's verdict distribution had been close to LLaVA's under the revised prompts (64.4\% vs.\ 63.7\% valid).
-The vehicle discovery prompt was not revised and its confirmation rate is unchanged (54.3\% vs.\ 54.4\%), ruling out run-to-run sampling noise, while the revised sign and human discovery prompts shifted confirmation by $+$11.7 and $+$9.7 points.
-Qwen's near-unconditional acceptance is therefore not an innate disposition but a model-specific response to a prompt revision that left LLaVA selective, and the within-model prompt effect (25.9\% of verdicts) is of the same order as the cross-model disagreement under identical prompts (40.6--42.9\% on the same subset).
-Both findings point to the same practical requirement: any change of model \emph{or} prompt in a VLM annotation pipeline requires behavioural re-validation.
+\textbf{Within-model prompt sensitivity is currently unmeasured.}
+The cross-model divergence above could in principle reflect stable model dispositions rather than prompt effects, and separating the two requires holding the model fixed while changing only the prompt.
+A development-stage revision of the prompt set previously supplied that test, over a 1{,}000-frame run of Qwen2.5-VL-72B under the original prompts, and we reported that the revision flipped a quarter of Qwen's BBox verdicts.
+That run was produced during the same period as the discarded campaign and roughly a third of its frames were served degenerate responses, so its rates are diluted by safe defaults in the same way and to an unknown degree per prompt; the stored results have since been deleted and are not recoverable.
+We therefore withdraw the within-model prompt-sensitivity result rather than restate corruption-diluted numbers, and the corresponding table is removed from this revision.
+Re-running the original prompts over the same frames under the health monitor is inexpensive relative to the main campaign, and restoring this control is the one experiment still outstanding for the portability claim: without it, the paper establishes that fixed prompts transfer unevenly across models but cannot attribute that unevenness to the prompts as opposed to the models.
+The discovery evidence above is nonetheless suggestive on this point, since the divergence is confined to a single prompt while the other two behave almost identically across models, which is difficult to explain as a global model disposition.
 
-\input{tables/prompt_sensitivity}
-
-Table~\ref{tab:agent_performance} quantifies signal agreement using Swin quality as the reference on 89{,}880 masks with Swin scores available (881 geometry-prefiltered masks are excluded).
-LLaVA achieves balanced precision and recall (72.0 / 71.1, F1 71.5), indicating selective verdicts that align with Swin.
-Qwen achieves high recall (95.5\%) but low precision (64.3\%, F1 76.9), confirming the near-unconditional acceptance behaviour visible in Table~\ref{tab:agent_behavior}.
+Table~\ref{tab:agent_performance} quantifies signal agreement using Swin quality as the reference on the 72{,}989 paired masks with Swin scores available (geometry-prefiltered masks are excluded).
+LLaVA achieves balanced precision and recall (71.8 / 71.4, F1 71.6), indicating selective verdicts that align with Swin.
+Qwen is the higher-recall, lower-precision judge (78.5 / 68.3, F1 73.0), consistent with the more permissive verdict distribution in Table~\ref{tab:agent_behavior}; restricting Qwen to answered masks raises both precision and accuracy (75.1 and 67.3), which quantifies how much of its apparent permissiveness was the safe-default substitution rather than the model.
+Under the discarded run the same measurement returned 95.5\% recall at 64.3\% precision, a profile that is close to what a judge answering \texttt{valid} unconditionally would produce, and in retrospect that near-degenerate signature was the clearest warning available in the aggregate statistics.
 The LiDAR consistency check behaves similarly (Prec 64.2, Rec 97.0, F1 77.3): it reliably passes Swin-valid masks but rarely rejects Swin-invalid ones, since it detects only sky or void leaks rather than semantic misclassification.
-Cross-VLM BBox agreement is 61.4\%, meaning the two models disagree on nearly four in ten masks despite using identical prompts.
+Cross-VLM BBox agreement is 56.8\%, meaning the two models disagree on more than four in ten masks despite using identical prompts.
 
 \input{tables/agent_performance}
 
@@ -478,10 +552,12 @@ This work evaluates a multi-agent refinement pipeline for SAM-based annotation i
 
 Under a single curated evaluation reference with paired bootstrap confidence intervals, Swin-only filtering is the strongest annotation strategy: pseudo-labels from 4{,}135 flagged frames filtered by the Swin agreement signal outperform a curated SAM baseline trained on 2{,}319 clean frames ($\Delta{=}{+}3.3$ mIoU, 95\% CI $[+1.5,+5.5]$), while adding VLM verdicts to the triage rule yields no significant further gain under the fixed-prompt configuration studied here.
 Annotation volume combined with a cheap domain-adapted quality signal therefore compensates for initial label noise without any VLM inference.
-Swin-driven discovery recovers thousands of objects SAM missed, and its downstream cost tracks confirmed candidate-set volume and precision rather than mask geometry: a large, unselective confirmed set trails Swin-only filtering nearly as much as adding every unconfirmed candidate, but requiring both VLMs to agree before confirming a candidate, the same concordance principle used for triage, recovers annotation quality to parity with the curated baseline.
-Because the curated reference is itself SAM-derived and cannot credit genuine recoveries, some of this remaining cost is an artifact of evaluation rather than annotation quality; resolving the two apart requires human-verified evaluation labels, which we identify as the most important next step.
+Swin-driven discovery recovers thousands of objects SAM missed, and its downstream cost tracks confirmed candidate-set volume and precision rather than mask geometry: a large, barely selective confirmed set trails Swin-only filtering nearly as much as adding every unconfirmed candidate does.
+Because the curated reference is itself SAM-derived and cannot credit genuine recoveries, some of this cost is an artifact of evaluation rather than annotation quality; resolving the two apart requires human-verified evaluation labels, which we identify as the most important next step.
 
-Applying identical prompts to Qwen2.5-VL-72B reveals that prompt-response calibration determines annotation behaviour more than model capability: the same prompt elicits near-unconditional acceptance from Qwen in triage and strong scepticism in discovery, producing systematically different annotation distributions without any change to the pipeline, and these differences propagate to downstream training. This finding has a practical implication: deploying a VLM annotation pipeline with a new model requires behavioural validation of prompt responses, not just a capability benchmark.
+Applying identical prompts to Qwen2.5-VL-72B shows that fixed prompts do not transfer neutrally between open VLMs, and that the failure is localised rather than global. Qwen is the more permissive mask judge, by at least 5.3 points on masks both models answered, but it redistributes rather than uniformly relaxes its rejections: it rejects fewer signs and cyclists than LLaVA and more vehicles and pedestrians, and the two models agree on only 56.8\% of crops. On discovery they confirm the same candidate stream at almost the same aggregate rate, with the entire divergence concentrated in the single prompt that disambiguates cyclist from pedestrian, where Qwen confirms 43.5\% against LLaVA's 84.9\%. Portability validation must therefore be per-prompt and per-class: one aggregate acceptance rate per model would have scored these two as near-equivalent on discovery while missing a large deficit on exactly the two safety-critical classes.
+
+The most transferable lesson of this work is a negative one about measurement. An earlier version of this comparison reported a far cleaner story, in which the same prompts elicited near-unconditional acceptance from Qwen alongside strong discovery scepticism. Both halves were produced by a serving fault that returned content-free responses which each agent silently replaced with its safe default, in opposite directions on the two tasks, across 72\,\% of frames. Nothing in the pipeline's exit status, its availability checks, or its aggregate verdict distributions distinguished that run from a healthy one, and the resulting numbers were more coherent and more publishable than the corrected ones. We therefore recommend that VLM-as-judge pipelines monitor individual response content rather than service availability, record per-call parse outcomes so that a substituted default is never reported as a judgement, and treat a verdict distribution approaching the pipeline's own default as a fault signature rather than a finding.
 
 Cross-dataset transfer to iSEAuto shows that ZOD pretraining on raw, unfiltered SAM pseudo-labels transfers \emph{worse} than no ZOD pretraining at all: it trails ImageNet-only scratch initialisation at 15 of 17 sampled epochs, while Swin-filtered pretraining is never the worst of the three and leads at 10 of 17; all three converge to the same final level by epoch 90. Annotation quality therefore does not merely affect in-domain ZOD mIoU, poor pseudo-labels can actively harm downstream transfer relative to using no domain-specific pretraining at all, which is a practical risk for any pipeline that pretrains on unfiltered pseudo-labels. The architecture is backend-agnostic and suitable for local deployment. Future work includes human-verified evaluation labels, multi-seed replication of the transfer comparison, evaluation on additional datasets, adaptive discovery thresholds, and extensions to panoptic or temporal segmentation.
 
