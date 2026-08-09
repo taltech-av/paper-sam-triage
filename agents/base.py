@@ -5,7 +5,7 @@ from typing import Optional
 from config import VLM_MAX_RETRIES
 from core.bundle import Bundle
 from vlm.client import VLMClient
-from vlm.health import VLMHealthMonitor, looks_degenerate
+from vlm.health import VLMHealthError, VLMHealthMonitor, looks_degenerate
 
 # Set to True to print raw VLM responses — useful for diagnosing unexpected rejections
 DEBUG_RAW_RESPONSES = False
@@ -69,6 +69,11 @@ class BaseAgent(ABC):
 
                 if parsed is not None:
                     return AgentOutcome(parsed)
+            except VLMHealthError:
+                # The server is down, not this call. Retrying or substituting a
+                # default here is exactly the behaviour that hid the 2026-06
+                # outage, so let it abort the run.
+                raise
             except Exception as e:
                 last_raw = None
                 if self.monitor is not None:

@@ -353,6 +353,10 @@ def process_frame(
             if discovered:
                 n_confirmed = sum(1 for d in discovered if d.confirmed)
                 tqdm.write(f"  {frame_id}  discovery: {n_confirmed}/{len(discovered)} confirmed")
+        except VLMHealthError:
+            # A degraded server is not a per-frame discovery failure — skipping
+            # it here would write the frame with every candidate unconfirmed.
+            raise
         except Exception as e:
             tqdm.write(f"  {frame_id}  discovery ERROR (skipped): {e}")
         discovery_elapsed = round(time.perf_counter() - t_disc, 4)
@@ -400,8 +404,9 @@ def process_frame(
     )
     visualize_frame(frame_id, config.VIS_DIR)
 
-    # Checked after the frame is safely on disk: a tripped monitor aborts the
-    # run, and everything completed so far stays resumable.
+    # Backstop only: the monitor already raises from `record`, mid-frame, so a
+    # saturated window never gets this far. This catches a swallowed abort, at
+    # a point where the frame is safely on disk and the run stays resumable.
     if monitor is not None:
         monitor.check()
     return result
@@ -533,7 +538,7 @@ def main():
     health = monitor.snapshot()
     if health.degenerate:
         print(f"\n  WARNING: {health.degenerate}/{health.calls} VLM responses "
-              f"({health.window_rate:.1%}) carried no usable content. Masks and "
+              f"({health.overall_rate:.1%}) carried no usable content. Masks and "
               f"candidates affected are flagged `parse_failed` in the results.")
 
     if aborted:

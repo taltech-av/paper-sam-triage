@@ -18,7 +18,7 @@ from PIL import Image
 import config
 from agents.swin_quality_agent import SWIN_SIZE
 from vlm.client import VLMClient
-from vlm.health import VLMHealthMonitor, looks_degenerate
+from vlm.health import VLMHealthError, VLMHealthMonitor, looks_degenerate
 
 # Swin output class → pipeline class_id (None = needs VLM disambiguation)
 SWIN_TO_PIPELINE: dict[int, int | None] = {
@@ -147,6 +147,8 @@ class DiscoveryAgent:
                     if self.monitor is not None:
                         self.monitor.record(response)
                     break
+                except VLMHealthError:
+                    raise
                 except Exception:
                     if self.monitor is not None:
                         self.monitor.record(None)

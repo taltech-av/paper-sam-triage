@@ -14,6 +14,7 @@ import pathlib
 import re
 import sys
 
+import config
 from vlm.health import (
     EXIT_HEALTH_ABORT, VLMHealthError, VLMHealthMonitor, looks_degenerate,
 )
@@ -48,14 +49,24 @@ try:
 except VLMHealthError:
     check("stays quiet below min_samples", False)
 
-for _ in range(41):
-    m.record("??????????")
+try:
+    m.record("??????????")          # the 60th — min_samples is now satisfied
+    check("record() raises the moment the window saturates", False)
+except VLMHealthError as e:
+    check("record() raises the moment the window saturates", True)
+    check("message names the cause", "degenerate" in str(e).lower())
+
+# A swallowed abort must not disarm the monitor: every later call raises too.
+try:
+    m.record("sign")
+    check("stays tripped after a swallowed abort", False)
+except VLMHealthError:
+    check("stays tripped after a swallowed abort", True)
 try:
     m.check()
-    check("trips once the window is degenerate", False)
-except VLMHealthError as e:
-    check("trips once the window is degenerate", True)
-    check("message names the cause", "degenerate" in str(e).lower())
+    check("check() still reports a tripped monitor", False)
+except VLMHealthError:
+    check("check() still reports a tripped monitor", True)
 
 clean = VLMHealthMonitor(window=100, max_rate=0.5, min_samples=60)
 for i in range(200):
@@ -125,7 +136,9 @@ check("run() still returns a bare string", _StubAgent(_Client("alpha"), None).ru
 print("\nReplay: the real 2026-06 run")
 runs = {}
 for tag in ("qwen2.5vl_72b", "llava_34b"):
-    files = sorted(glob.glob(f"/run/media/tom/ml/zod_temp/vlm/{tag}/results/*.json"))
+    # Via config so the replay follows the project's data root instead of
+    # carrying a second copy of it that silently goes stale when the disk moves.
+    files = sorted(glob.glob(str(config.DATA_ROOT / "vlm" / tag / "results" / "*.json")))
     if not files:
         print(f"  skip {tag} — results not on this machine")
         continue

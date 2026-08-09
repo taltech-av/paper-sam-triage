@@ -61,14 +61,26 @@ class HealthSnapshot:
     window_size: int
 
     @property
-    def window_rate(self) -> float:
+    def overall_rate(self) -> float:
+        """Degenerate share of every call since the process started."""
         return self.degenerate / self.calls if self.calls else 0.0
 
+    @property
+    def window_rate(self) -> float:
+        """Degenerate share of the recent window — what the trip rule reads."""
+        return self.window_degenerate / self.window_size if self.window_size else 0.0
+
     def as_dict(self) -> dict:
+        # `degenerate_rate` is cumulative and has always been; it is kept under
+        # that name so runs stay comparable. The window rate — the one the trip
+        # rule acts on, and the one that moves first when a server degrades —
+        # is reported alongside it rather than conflated with it.
         return {
             "vlm_calls": self.calls,
             "degenerate_responses": self.degenerate,
-            "degenerate_rate": round(self.window_rate, 4),
+            "degenerate_rate": round(self.overall_rate, 4),
+            "window_degenerate_rate": round(self.window_rate, 4),
+            "window_size": self.window_size,
         }
 
 
@@ -79,12 +91,19 @@ class VLMHealthMonitor:
     Thread-safe: `process_frames` runs several frames concurrently against one
     client, so every agent records into the same monitor.
 
-    `max_rate` is deliberately loose. The failure this guards against saturates
-    at 100% within minutes, so a threshold anywhere below that catches it, while
-    a loose one cannot be tripped by an unlucky run of genuinely hard crops.
+    `max_rate` stays well clear of the baseline without waiting for saturation.
+    Legitimate answers are never degenerate — a one-word verdict always carries
+    alphanumerics — so the only floor is transport errors and agent exceptions,
+    which sit at 1-3% of calls in practice. A 200-call window at 35% is an order
+    of magnitude above that, while the fault itself runs to 90-100%.
+
+    The check runs on *every* recorded answer, not once per frame. Frames take
+    300-800 s and issue 20-60 calls each across 4 workers, so a per-frame check
+    let 300+ garbage responses reach disk per episode during the 2026-08-09
+    rerun. Checking per call bounds the leak at roughly one window.
     """
 
-    def __init__(self, window: int = 200, max_rate: float = 0.5, min_samples: int = 60):
+    def __init__(self, window: int = 200, max_rate: float = 0.35, min_samples: int = 60):
         self.window = window
         self.max_rate = max_rate
         self.min_samples = min_samples
@@ -93,14 +112,52 @@ class VLMHealthMonitor:
         self._calls = 0
         self._degenerate = 0
         self._tripped = False
+        self._trip_stats: Optional[tuple[int, int]] = None
+
+    def _saturation_locked(self) -> Optional[tuple[int, int]]:
+        """
+        (degenerate, total) for the window once it has gone bad, else None.
+
+        Once tripped this keeps returning the same stats rather than latching
+        silent: a caller that swallows the abort must hit it again on its next
+        call, otherwise one stray `except Exception` disarms the monitor for the
+        rest of the run.
+        """
+        if self._tripped:
+            return self._trip_stats
+        if len(self._recent) < self.min_samples:
+            return None
+        bad, total = sum(self._recent), len(self._recent)
+        if bad / total < self.max_rate:
+            return None
+        self._tripped = True
+        self._trip_stats = (bad, total)
+        return self._trip_stats
+
+    def _error(self, bad: int, total: int) -> "VLMHealthError":
+        return VLMHealthError(
+            f"VLM returning degenerate output: {bad}/{total} of the last responses "
+            f"carry no usable content ({bad / total:.0%}). The server has most likely "
+            f"degraded and needs reloading — see vlm/health.py. Aborting rather "
+            f"than writing defaulted verdicts; rerun with --resume once it is back."
+        )
 
     def record(self, raw: Optional[str]) -> bool:
-        """Record one VLM answer. Returns True if it was degenerate."""
+        """
+        Record one VLM answer. Returns True if it was degenerate.
+
+        Raises VLMHealthError as soon as the window is saturated, so the run
+        stops mid-frame instead of finishing the frame with garbage verdicts.
+        The partial frame is simply not written; `--resume` picks it up.
+        """
         bad = looks_degenerate(raw)
         with self._lock:
             self._calls += 1
             self._degenerate += bad
             self._recent.append(bad)
+            stats = self._saturation_locked()
+        if stats is not None:
+            raise self._error(*stats)
         return bad
 
     def snapshot(self) -> HealthSnapshot:
@@ -113,21 +170,16 @@ class VLMHealthMonitor:
             )
 
     def check(self) -> None:
-        """Abort the run if the recent window is mostly degenerate."""
+        """
+        Abort the run if the recent window is mostly degenerate.
+
+        `record` already raises at the moment of saturation. This remains as an
+        end-of-frame backstop for the case where the raise was swallowed.
+        """
         with self._lock:
-            if self._tripped or len(self._recent) < self.min_samples:
-                return
-            bad, total = sum(self._recent), len(self._recent)
-            if bad / total < self.max_rate:
-                return
-            self._tripped = True
-            rate = bad / total
-        raise VLMHealthError(
-            f"VLM returning degenerate output: {bad}/{total} of the last responses "
-            f"carry no usable content ({rate:.0%}). The server has most likely "
-            f"degraded and needs reloading — see vlm/health.py. Aborting rather "
-            f"than writing defaulted verdicts; rerun with --resume once it is back."
-        )
+            stats = self._saturation_locked()
+        if stats is not None:
+            raise self._error(*stats)
 
 
 # ── canary ────────────────────────────────────────────────────────────────────
