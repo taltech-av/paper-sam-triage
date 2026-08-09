@@ -3,7 +3,7 @@ from pathlib import Path
 
 # --- Data paths ---
 # HPC: DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
-DATA_ROOT = Path("/run/media/tom/ml/zod_temp")
+DATA_ROOT = Path("/mnt/ml/zod_temp")
 CAMERA_DIR = DATA_ROOT / "camera"
 LIDAR_DIR = DATA_ROOT / "lidar_png"
 ANNOTATION_SAM_DIR = DATA_ROOT / "annotation_sam"
@@ -12,7 +12,7 @@ FRAMES_FILE = Path(__file__).parent / "frames" / "bad_frames.csv"
 # Original 4K ZOD images — used instead of 768px camera/ when available
 # Set to None to always use the downscaled camera/ images
 # HPC: ZOD_DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod-data/single_frames")
-ZOD_DATA_ROOT = Path("/run/media/tom/ml/zod-data/single_frames")
+ZOD_DATA_ROOT = Path("/mnt/ml/zod-data/single_frames")
 
 # All pipeline outputs live under one folder
 OUTPUT_ROOT = DATA_ROOT / "vlm"
@@ -113,7 +113,7 @@ DISCOVERY_MIN_PIXELS = 20
 DISCOVERY_MAX_CANDIDATES = 10
 
 # --- Swin quality agent ---
-FUSION_DIR = Path("/run/media/tom/ml/projects/fusion-training")
+FUSION_DIR = Path("/mnt/ml/projects/fusion-training")
 SWIN_CFG_PATH  = FUSION_DIR / "config/zod/swin/config_9.json"
 SWIN_CKPT_PATH = FUSION_DIR / "logs/zod/swin/config_9/best.pth"
 SWIN_DEVICE = "cuda:0"

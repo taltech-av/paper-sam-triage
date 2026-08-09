@@ -49,12 +49,20 @@ stop_ollama() {
 
 run_pipeline_with_restarts() {
     local restarts=0
-    # Consecutive aborts that completed no frames at all. One of these is
-    # expected and recoverable — a server already degraded when the job starts
-    # fails the canary and aborts before writing anything, which is precisely
-    # what a reload fixes. Two in a row means the reload is not working.
+    # Consecutive aborts that completed no frames at all. A server already
+    # degraded at job start fails the canary and aborts before writing
+    # anything, which is precisely what a reload fixes.
+    #
+    # The default of 2 was set when the monitor only checked between frames, so
+    # an abort still left the in-flight frames on disk and zero progress really
+    # did mean nothing was working. The monitor now aborts mid-call and those
+    # frames are discarded, so a zero-progress abort is the *normal* shape of a
+    # short-lived episode — with several workers sharing the good calls a fresh
+    # load provides, no single frame need reach the end. Raise MAX_STUCK (and
+    # drop PIPELINE_WORKERS to 1) when resuming a set of frames that reliably
+    # degrades the server.
     local stuck=0
-    local max_stuck=2
+    local max_stuck="${MAX_STUCK:-2}"
 
     start_ollama
     echo "[$(date)] Warming up $MODEL..."
@@ -65,7 +73,14 @@ run_pipeline_with_restarts() {
         local before
         before=$(completed_frames)
 
-        python process_frames.py --model "$MODEL" --tag "$TAG" --resume --hpc
+        # Fewer workers concentrate the good calls a fresh load provides into
+        # one frame instead of splitting them across several unfinished ones,
+        # which is what turns a zero-progress abort back into progress.
+        local worker_args=()
+        [ -n "${PIPELINE_WORKERS:-}" ] && worker_args=(--workers "$PIPELINE_WORKERS")
+
+        python process_frames.py --model "$MODEL" --tag "$TAG" --resume --hpc \
+            "${worker_args[@]}"
         local status=$?
 
         local after
