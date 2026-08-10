@@ -47,10 +47,17 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
+import config
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-ZOD_META_ROOT   = Path("/run/media/tom/ml/zod-data/single_frames")
-DEFAULT_ANN_DIR = Path("/run/media/tom/ml/zod_temp/annotation_sam")
+# Taken from config rather than restated. These were hardcoded copies of the
+# data root, and when the disk moved they silently pointed at nothing: the
+# weather lookup then failed for every frame and fell back to "day_fair", which
+# collapses the weather stratification and the per-weather test subsets without
+# raising. The run still "succeeded".
+ZOD_META_ROOT   = config.ZOD_DATA_ROOT
+DEFAULT_ANN_DIR = config.ANNOTATION_SAM_DIR
 
 # ── Class definitions ─────────────────────────────────────────────────────────
 

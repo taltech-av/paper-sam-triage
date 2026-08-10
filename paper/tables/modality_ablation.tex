@@ -1,25 +1,10 @@
 \begin{table}[t]
 \centering
-\caption{Modality ablation on CLFTv2-Base using Swin + disc.\ as the annotation variant.
-         RGB uses camera only; LiDAR uses depth projection only; CrossFusion uses both.
-         All rows are evaluated on the same clean-partition test frames against the curated annotations.
-         mIoU averages vehicle, sign, and human; fw-IoU weights each class by pixel frequency.}
+\caption{Modality ablation (RGB, LiDAR, CrossFusion) on CLFTv2-Base.}
 \label{tab:modality_ablation}
-\resizebox{\columnwidth}{!}{%
-\begin{tabular}{llccccc}
+\begin{tabular}{l}
 \toprule
-\textbf{Modality} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} \\
-\midrule
-\multicolumn{7}{l}{\textit{SAM (curated) baseline — clean partition}} \\
-RGB & -- & 65.2 & 32.5 & 35.8 & 41.2 & 56.0 \\
-LiDAR & -- & 52.9 & 24.1 & 24.7 & 30.4 & 44.5 \\
-CrossFusion & -- & 67.8 & 37.1 & 38.2 & 44.4 & 58.9 \\
-\addlinespace
-\multicolumn{7}{l}{\textit{Swin + disc.\ — Qwen2.5-VL-72B}} \\
-CrossFusion & Qwen2.5-VL-72B & 68.9 & 38.6 & 39.8 & 45.1 & 60.2 \\
-\addlinespace
-\multicolumn{7}{l}{\textit{Swin + disc.\ — LLaVA-1.6-34B}} \\
-CrossFusion & LLaVA-1.6-34B & 62.8 & 32.0 & 35.1 & 40.5 & 54.1 \\
+\textit{Pending — awaiting retrained checkpoints.} \\
 \bottomrule
-\end{tabular}}
+\end{tabular}
 \end{table}

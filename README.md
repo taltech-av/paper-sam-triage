@@ -37,18 +37,18 @@ python process_frames.py --model llava:34b --resume
 
 **Merge two VLM runs into a consensus annotation:**
 ```bash
-python merge_annotations.py --tag-a qwen2.5vl_72b --tag-b llava_34b
+python merge_annotations.py --tag-a llava_34b --tag-b qwen2.5vl_72b_v2
 ```
 
 **Replay triage offline (no GPU, sweeps thresholds from stored JSON):**
 ```bash
-python replay_triage.py --variant swin_only --swin-threshold 0.25 --tag qwen2.5vl_72b
+python replay_triage.py --variant swin_only --swin-threshold 0.25 --tag qwen2.5vl_72b_v2
 python replay_triage.py --list-variants
 ```
 
 **Analyse results:**
 ```bash
-python analyze_results.py --tag qwen2.5vl_72b
+python analyze_results.py --tag qwen2.5vl_72b_v2
 ```
 
 ## Models
@@ -68,7 +68,7 @@ OLLAMA_MODELS=/path/to/ollama_models ollama pull llava:34b
 ## HPC Deployment (A100 80 GB)
 
 ```bash
-sbatch slurms/vlm-qwen.slurm    # Qwen2.5-VL-72B  → tag: qwen2.5vl_72b
+sbatch slurms/vlm-qwen.slurm    # Qwen2.5-VL-72B  → tag: qwen2.5vl_72b_v2
 sbatch slurms/vlm-llava.slurm   # LLaVA-1.6-34B   → tag: llava_34b
 ```
 

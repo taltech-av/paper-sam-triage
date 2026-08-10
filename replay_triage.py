@@ -228,6 +228,20 @@ VARIANTS = {
     "limits_fixed":       (_triage_limits_fixed,       "Both limitation fixes: (a) + (b)"),
 }
 
+# What `--variant all` writes: exactly the variants a fusion training config
+# consumes. Every other entry in VARIANTS stays reachable by name for one-off
+# analysis, but is no longer materialised as a training set by default.
+#
+# The ablation is a ladder — raw_sam -> swin_only -> triage -> full — where each
+# step adds one pipeline stage, so a change in downstream score is attributable
+# to that stage. The rule variations that used to be written here
+# (`vlm_only`, `disjunctive_reject`, `uniform_tau`, `limits_fixed`,
+# `with_bypass`, `swin_protected`, and the two halves of `limits_fixed`) all
+# landed inside the same 39-46 mIoU band and re-confirmed the same result, at
+# the cost of two GPU trainings each. Generate them by name if a specific
+# question needs one.
+PAPER_VARIANTS = ("raw_sam", "swin_only", "triage")
+
 
 # ── Annotation writer (mirrors annotation_writer.py logic) ───────────────────
 
@@ -359,7 +373,10 @@ def main():
         print(f"No results found in {config.RESULTS_DIR}")
         return
 
-    variants_to_run = list(VARIANTS.items()) if args.variant == "all" else [(args.variant, VARIANTS[args.variant])]
+    if args.variant == "all":
+        variants_to_run = [(n, VARIANTS[n]) for n in PAPER_VARIANTS]
+    else:
+        variants_to_run = [(args.variant, VARIANTS[args.variant])]
 
     disc_label = ""
     if args.with_discovery:
@@ -368,7 +385,14 @@ def main():
         disc_label = "_discovery_noVLM"
 
     for variant_name, (fn, desc) in variants_to_run:
-        out_dir = config.OUTPUT_ROOT / f"annotation_{variant_name}{disc_label}{args.out_suffix}"
+        # A replayed variant is VLM-independent only if its triage rule reads no
+        # VLM field *and* any discovery it adds is unfiltered (`--with-discovery-all`).
+        # `--with-discovery` confirms candidates with the VLM, which makes even a
+        # swin_only base model-specific.
+        vlm_free = (variant_name in config.VLM_INDEPENDENT_VARIANTS
+                    and not args.with_discovery)
+        root = config.DATA_ROOT if vlm_free else config.OUTPUT_ROOT
+        out_dir = root / f"annotation_{variant_name}{disc_label}{args.out_suffix}"
         print(f"\nVariant : {variant_name}{disc_label}  —  {desc}")
         print(f"τ_q     : {args.swin_threshold}   τ_skip: {args.swin_skip}")
         if use_discovery:

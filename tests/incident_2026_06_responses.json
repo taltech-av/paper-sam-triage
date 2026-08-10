@@ -1,0 +1,13 @@
+{
+ "_comment": "Distinct discovery vlm_response values from the 2026-06 qwen2.5vl_72b incident run, with counts. The 5.2 GB run itself was deleted 2026-08-10; this preserves the corpus test_health_fix.py replays against.",
+ "source_tag": "qwen2.5vl_72b",
+ "frames": 4135,
+ "responses": {
+  "??????????": 43784,
+  "sign": 4907,
+  "vehicle": 4481,
+  "other": 1968,
+  "pedestrian": 272,
+  "cyclist": 218
+ }
+}

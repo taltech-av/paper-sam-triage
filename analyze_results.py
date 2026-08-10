@@ -5,9 +5,11 @@ Post-run analysis of VLM pipeline results.
 Reads vlm/results/frame_*.json and prints a paper-ready report.
 All sections are formatted for direct copy-paste into the paper draft.
 
-Sync from HPC then run (replace TAG with the model tag, e.g. qwen2.5vl_72b):
-    rsync -avP totahv@base.hpc.taltech.ee:/gpfs/mariana/smbhome/totahv/zod_temp/vlm/TAG/results/ \\
-        /run/media/tom/ml/zod_temp/vlm/TAG/results/
+Sync from HPC then run (replace TAG with the model tag, e.g. qwen2.5vl_72b_v2).
+`--delete` matters: scp/rsync without it leaves pruned frames behind locally,
+which is how a cleaned run reappears dirty on this machine.
+    rsync -av --delete totahv@base.hpc.taltech.ee:/gpfs/mariana/smbhome/totahv/zod_temp/vlm/TAG/ \\
+        /mnt/ml/zod_temp/vlm/TAG/
     python analyze_results.py --tag TAG
 
 The report opens with RUN INTEGRITY, which must be read before any other
@@ -26,6 +28,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import config
+from vlm.health import looks_degenerate
 
 SEP  = "─" * 64
 SEP2 = "═" * 64
@@ -53,12 +56,12 @@ def load_results(results_dir: Path) -> list[dict]:
 #   2. Recorded flags. `discovered[].degenerate` and the per-agent
 #      `masks[].parse_failed[agent].degenerate` are written by the pipeline
 #      itself and cover every call, mask calls included.
-
-def looks_degenerate(raw) -> bool:
-    """A response carrying no usable content. Mirrors vlm.health.looks_degenerate."""
-    stripped = (raw or "").strip()
-    return bool(stripped) and not any(ch.isalnum() for ch in stripped)
-
+#
+# `looks_degenerate` is imported from vlm.health rather than restated here. A
+# local copy used to shadow it and the two had already drifted — this one
+# scored a None or empty response as *usable*, where the pipeline's own
+# definition counts both as degenerate — so the same run could be called clean
+# by the analysis and aborted by the monitor.
 
 # Agents whose output core.triage.decide() actually reads. A degenerate answer
 # from one of these changes the stored verdict; failure_mode is recorded but

@@ -29,6 +29,21 @@ def _set_output_dirs(root: Path) -> None:
     VIS_DIR = root / "visualization"
 
 
+# Variants whose decisions read no VLM output at all: `raw_sam` accepts every
+# mask, `swin_only` thresholds the Swin agreement score. Two runs of different
+# models produce byte-identical results for these, so they are written once to
+# DATA_ROOT alongside annotation_sam rather than duplicated under each
+# vlm/<tag>/. Filing them under a model tag also implies a provenance they do
+# not have — nothing in `vlm/llava_34b/annotation_raw_sam` came from LLaVA.
+VLM_INDEPENDENT_VARIANTS = frozenset({"raw_sam", "swin_only"})
+
+
+def variant_dir(variant_name: str, tag_root: Path) -> Path:
+    """Where a variant's annotation PNGs belong: dataset root, or under the tag."""
+    root = DATA_ROOT if variant_name in VLM_INDEPENDENT_VARIANTS else tag_root
+    return root / f"annotation_{variant_name}"
+
+
 def set_run_tag(tag: str) -> None:
     """Namespace all outputs under vlm/<tag>/ so multiple runs never collide."""
     _set_output_dirs(DATA_ROOT / "vlm" / tag)

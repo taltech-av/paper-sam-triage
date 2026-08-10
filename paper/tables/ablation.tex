@@ -1,53 +1,33 @@
 \begin{table*}[t]
 \centering
 \caption{Annotation variant ablation on CLFTv2-Base (RGB--LiDAR CrossFusion).
-         All variants are evaluated on the same 565 clean-partition test frames against the manually curated annotations,
+         All variants are evaluated on the same held-out test frames against the human-verified reference,
          so scores are directly comparable across rows.
          mIoU averages vehicle, sign, and human (cyclist + pedestrian combined) and is the mean over the five weather-condition mIoUs;
          fw-IoU weights each class by its pixel frequency.
-         95\% CIs are from a paired bootstrap over test frames (10{,}000 resamples, stratified by weather condition).
+         The last column reports the \emph{paired} difference in mIoU against the Swin only variant, with a 95\% CI from a bootstrap over test frames
+         (10{,}000 resamples, stratified by weather condition; the same resample indices are applied to every variant).
+         A paired difference is the statistic this design supports: all variants are evaluated on the same frames,
+         so per-variant marginal CIs overlap far more than the differences themselves and understate the separation.
+         An interval excluding zero means the variant differs significantly from Swin only.
          Bold marks the best result in each metric column.
-         \textsuperscript{\dag}Trained on, or derived from, the superseded Qwen annotations produced before the
-         serving fault of Section~\ref{par:serving} was identified, so their training labels contain defaulted
-         verdicts rather than model judgements. Reported for completeness; no conclusions are drawn from them,
-         and retraining on the corrected annotations is in progress.}
+         Rows without numbers are planned runs whose checkpoints do not exist yet.}
 \label{tab:ablation}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llc ccccc l}
 \toprule
 \textbf{Variant} & \textbf{Description} & \textbf{VLM} &
-  \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & \textbf{95\% CI (mIoU)} \\
+  \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & \textbf{$\Delta$mIoU vs Swin only (95\% CI)} \\
 \midrule
-\multicolumn{9}{l}{\textit{Baseline — trained on 2{,}319 curated clean-partition frames}} \\
-SAM (curated) & Manually reviewed clean-partition annotations & \textemdash & 67.8 & 37.1 & 38.2 & 44.4 & 58.9 & [41.0, 46.3] \\
-\addlinespace
-\multicolumn{9}{l}{\textit{VLM-independent — trained on 4{,}135 flagged-partition frames}} \\
-Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & 68.2 & 35.2 & 37.8 & 43.2 & 58.8 & [39.8, 45.2] \\
-Swin only & Swin agreement threshold; no VLM & \textemdash & \textbf{70.5} & \textbf{42.0} & \textbf{41.0} & \textbf{47.6} & \textbf{62.1} & [44.2, 49.9] \\
-Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & 62.3 & 30.6 & 33.9 & 39.5 & 53.3 & [36.4, 41.3] \\
-\addlinespace
-\multicolumn{9}{l}{\textit{VLM-dependent variants — trained on 4{,}135 flagged-partition frames}} \\
-VLM only\textsuperscript{\dag} & BBox VLM + consistency; Swin quality ignored & Qwen & 69.4 & 35.8 & 37.8 & 45.0 & 59.8 & [41.6, 46.8] \\
-VLM only &  & LLaVA & 68.2 & 40.6 & 26.8 & 43.7 & 58.8 & [39.8, 45.9] \\
-Triage\textsuperscript{\dag} & Swin + VLM + consistency & Qwen & 68.4 & 35.9 & 37.0 & 43.9 & 59.0 & [40.4, 45.9] \\
-Triage &  & LLaVA & 68.2 & 39.5 & 38.7 & 44.5 & 59.7 & [40.7, 46.7] \\
-Swin + disc.\textsuperscript{\dag} & Swin filtering + VLM-confirmed discovery & Qwen & 68.9 & 38.6 & 39.8 & 45.1 & 60.2 & [41.5, 47.1] \\
-Swin + disc. &  & LLaVA & 62.8 & 32.0 & 35.1 & 40.5 & 54.1 & [37.1, 42.4] \\
-Triage + disc.\textsuperscript{\dag} & Full pipeline & Qwen & 67.5 & 33.8 & 37.0 & 42.5 & 58.0 & [39.3, 44.4] \\
-Triage + disc. &  & LLaVA & 61.9 & 30.3 & 33.3 & 39.4 & 53.0 & [36.0, 41.5] \\
-\addlinespace
-\multicolumn{9}{l}{\textit{Triage rule ablations (offline replay)}} \\
-Disjunctive reject\textsuperscript{\dag} & Any single negative signal rejects & Qwen & 70.1 & 36.7 & 40.8 & 46.0 & 60.8 & [42.1, 48.6] \\
-Disjunctive reject &  & LLaVA & 70.1 & 35.3 & 26.5 & 42.2 & 59.0 & [38.2, 44.7] \\
-Uniform $\tau_q$\textsuperscript{\dag} & Single threshold across all classes & Qwen & 67.8 & 35.9 & 38.2 & 44.2 & 58.7 & [40.8, 46.1] \\
-Uniform $\tau_q$ &  & LLaVA & 69.3 & 39.4 & 39.3 & 44.6 & 60.6 & [41.1, 46.7] \\
-\addlinespace
-\multicolumn{9}{l}{\textit{Limitation fixes and two-VLM consensus (offline replay)}} \\
-Triage (fixed) + disc. & Triage with both limitation fixes + confirmed discovery & LLaVA & 61.8 & 30.5 & 34.1 & 39.1 & 53.0 & [36.0, 41.2] \\
-Consensus triage + disc.\textsuperscript{\dag} & Reject / add discovery only when both VLMs agree & Both & 67.2 & 33.9 & 37.5 & 42.6 & 57.8 & [39.1, 44.5] \\
-Swin + consensus disc.\textsuperscript{\dag} & Swin filtering + discovery confirmed by both VLMs & Both & 68.2 & 39.1 & 39.0 & 44.7 & 59.7 & [40.7, 47.0] \\
+Human-verified & All 4,110 flagged frames manually verified; incorrect masks removed & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+SAM (curated) & Manually reviewed clean-partition annotations & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+Swin only & Swin agreement threshold; no VLM & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+Triage & Swin + VLM + consistency & LLaVA & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+Triage &  & Qwen & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+Triage + disc. & Full pipeline & LLaVA & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+Triage + disc. &  & Qwen & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
 \bottomrule
 \end{tabular}}
-\\[2pt]
-\footnotesize\textsuperscript{\dag} Superseded --- see caption.
 \end{table*}

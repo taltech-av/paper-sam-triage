@@ -191,16 +191,26 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
 def _compute_variant_decisions(
     proposals: list, triage_results: list
 ) -> dict[str, dict[int, str]]:
-    """Derive per-mask decisions for all training-data variants from in-memory results.
+    """Derive per-mask decisions for the training-data variants from in-memory results.
 
-    Variants produced:
+    Variants produced — one per row of the downstream ablation, no more. Each
+    adds exactly one pipeline stage to the one before it, so a change in
+    downstream score is attributable to that stage:
+
         raw_sam   — no triage, accept everything (true SAM baseline)
         swin_only — Swin agreement threshold only, per-class τ_q
-        vlm_only  — BBox VLM + consistency, Swin quality ignored
         triage    — full concordance triage, no discovery
+
+    `annotation_full` (triage + discovery) is written separately by
+    write_annotation, completing the ladder.
+
+    Anything else — `vlm_only`, alternative triage rules, discovery on a
+    different base — is reachable offline through replay_triage.py from the
+    stored results, so it costs nothing to leave out of every run. Writing a
+    variant here means writing it for every frame of every run forever.
     """
     from core.triage import triage as _triage
-    raw_sam, swin_only, vlm_only, triage_no_disc = {}, {}, {}, {}
+    raw_sam, swin_only, triage_no_disc = {}, {}, {}
     for proposal, result in zip(proposals, triage_results):
         mid = proposal.mask_id
         cls_id = proposal.class_id
@@ -214,19 +224,9 @@ def _compute_variant_decisions(
             else "accept"
         )
 
-        # metadata prefilter masks have no agent outputs — propagate their reject
-        is_auto = (result.bbox_out is None and result.consistency_out is None
-                   and result.decision == _TRIAGE_REJECT)
-        vlm_only[mid] = (
-            _TRIAGE_REJECT if is_auto
-            else _triage(result.bbox_out, None, None, result.correction_out,
-                         result.consistency_out).decision
-        )
-
         triage_no_disc[mid] = result.decision
 
-    return {"raw_sam": raw_sam, "swin_only": swin_only,
-            "vlm_only": vlm_only, "triage": triage_no_disc}
+    return {"raw_sam": raw_sam, "swin_only": swin_only, "triage": triage_no_disc}
 
 
 def _write_variant(
@@ -286,10 +286,9 @@ def process_frame(
     if not proposals:
         write_annotation(frame_id, original_ann, [], [], ann_out_dir)
         # All variants are identical to annotation_full when there are no masks to triage
-        for variant in ("raw_sam", "swin_only", "vlm_only", "triage",
-                        "swin_discovery", "raw_sam_discovery"):
+        for variant in ("raw_sam", "swin_only", "triage"):
             _write_variant(frame_id, original_ann, [],
-                           {}, ann_out_dir.parent / f"annotation_{variant}")
+                           {}, config.variant_dir(variant, ann_out_dir.parent))
         return write_frame_result(frame_id, [], [], results_out_dir)
 
     import datetime
@@ -388,15 +387,13 @@ def process_frame(
     variants = _compute_variant_decisions(proposals, triage_results)
     for variant_name, decisions in variants.items():
         _write_variant(frame_id, original_ann, proposals, decisions,
-                       ann_out_dir.parent / f"annotation_{variant_name}")
+                       config.variant_dir(variant_name, ann_out_dir.parent))
 
-    # *_discovery variants: base mask decisions + confirmed discovery objects
-    _write_variant(frame_id, original_ann, proposals, variants["swin_only"],
-                   ann_out_dir.parent / "annotation_swin_discovery",
-                   discovered=discovered)
-    _write_variant(frame_id, original_ann, proposals, variants["raw_sam"],
-                   ann_out_dir.parent / "annotation_raw_sam_discovery",
-                   discovered=discovered)
+    # No *_discovery variants are written here. `annotation_full` above already
+    # carries triage + discovery, which is the discovery row the ablation uses;
+    # the discovery controls (`swin_only` with all Swin candidates, or with
+    # VLM-confirmed ones) are replay_triage.py's job, since they are derivable
+    # from the stored `discovered[]` without re-running anything.
 
     result = write_frame_result(
         frame_id, proposals, triage_results, results_out_dir, discovered,
@@ -554,7 +551,7 @@ def main():
     write_summary(frame_records, results_out_dir)
     print(f"\nDone. {len(frame_records)} frames processed.")
     print(f"  Annotations    → {ann_out_dir}  (full system: triage + discovery)")
-    print(f"  Variants       → annotation_{{raw_sam,raw_sam_discovery,swin_only,swin_discovery,vlm_only,triage}}")
+    print(f"  Variants       → annotation_{{raw_sam,swin_only,triage}} (+ annotation_full)")
     print(f"  Results        → {results_out_dir}")
     print(f"  Visualizations → {config.VIS_DIR}")
 

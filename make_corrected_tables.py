@@ -25,69 +25,53 @@ from bootstrap_miou import bootstrap, ci, load_variant, point_estimates
 WEATHER_ORDER = ["day_fair", "day_rain", "night_fair", "night_rain", "snow"]
 WEATHER_HEADERS = ["Day-fair", "Day-rain", "Night-fair", "Night-rain", "Snow"]
 
+# Reference row for the paired differences. Swin-only is the natural baseline
+# for this table: it is the strongest variant and uses no VLM at all, so every
+# other row reads as "what the VLM stage added", which is the question the
+# ablation exists to answer.
+REFERENCE_STEM = "shared_swin_only_fusion"
+REFERENCE_LABEL = "Swin only"
+
+# No superseded rows: every run in ABLATION_ROWS trains on the corrected
+# 4,110-frame annotations. Kept as a hook in case a legacy dump is ever
+# re-added alongside a fresh one.
+SUPERSEDED_STEMS: set[str] = set()
+
 # (dump-file stem, variant label, description, VLM label)
 ABLATION_ROWS = [
     ("baseline", None, None, None),
+    ("human_verified_fusion", "Human-verified", "All 4,110 flagged frames manually verified; incorrect masks removed", r"\textemdash"),
     ("shared_gt_fusion", "SAM (curated)", "Manually reviewed clean-partition annotations", r"\textemdash"),
     ("vlm_independent", None, None, None),
     ("shared_raw_sam_fusion", "Raw SAM", "No triage; SAM pseudo-labels unchanged", r"\textemdash"),
     ("shared_swin_only_fusion", "Swin only", "Swin agreement threshold; no VLM", r"\textemdash"),
-    # exact-CC-mask retrain preferred over the legacy bbox-rectangle run
-    ("shared_swin_discovery_noVLM_ccm_fusion|shared_swin_discovery_noVLM_fusion",
-     "Swin + disc.\\ (no VLM)", "Swin filtering + all Swin-detected discoveries", r"\textemdash"),
+    ("shared_swin_discovery_noVLM_ccm_fusion", "Swin + disc.\\ (no VLM)",
+     "Swin filtering + all Swin-detected discoveries", r"\textemdash"),
     ("vlm_dependent", None, None, None),
-    ("qwen_vlm_only_fusion", "VLM only", "BBox VLM + consistency; Swin quality ignored", "Qwen"),
-    ("llava_vlm_only_fusion", "VLM only", None, "LLaVA"),
-    ("qwen_triage_fusion", "Triage", "Swin + VLM + consistency", "Qwen"),
-    ("llava_triage_fusion", "Triage", None, "LLaVA"),
-    ("qwen_swin_discovery_ccm_fusion|qwen_swin_discovery_fusion",
-     "Swin + disc.", "Swin filtering + VLM-confirmed discovery", "Qwen"),
-    ("llava_swin_discovery_ccm_fusion|llava_swin_discovery_fusion",
-     "Swin + disc.", None, "LLaVA"),
-    ("qwen_full_fusion", "Triage + disc.", "Full pipeline", "Qwen"),
-    ("llava_full_fusion", "Triage + disc.", None, "LLaVA"),
-    ("rule_ablations", None, None, None),
-    ("qwen_disjunctive_reject_fusion", "Disjunctive reject", "Any single negative signal rejects", "Qwen"),
-    ("llava_disjunctive_reject_fusion", "Disjunctive reject", None, "LLaVA"),
-    ("qwen_uniform_tau_fusion", "Uniform $\\tau_q$", "Single threshold across all classes", "Qwen"),
-    ("llava_uniform_tau_fusion", "Uniform $\\tau_q$", None, "LLaVA"),
-    ("new_variants", None, None, None),
-    ("llava_limits_fixed_discovery_fusion", "Triage (fixed) + disc.", "Triage with both limitation fixes + confirmed discovery", "LLaVA"),
-    ("merged_consensus_union_disc_both_fusion", "Consensus triage + disc.", "Reject / add discovery only when both VLMs agree", "Both"),
-    ("merged_consensus_swin_disc_both_fusion", "Swin + consensus disc.", "Swin filtering + discovery confirmed by both VLMs", "Both"),
+    ("llava_triage_fusion", "Triage", "Swin + VLM + consistency", "LLaVA"),
+    ("qwen_triage_fusion", "Triage", None, "Qwen"),
+    ("llava_full_fusion", "Triage + disc.", "Full pipeline", "LLaVA"),
+    ("qwen_full_fusion", "Triage + disc.", None, "Qwen"),
 ]
 
 SECTION_HEADERS = {
-    "baseline": r"\multicolumn{9}{l}{\textit{Baseline — trained on 2{,}319 curated clean-partition frames}} \\",
-    "vlm_independent": r"\multicolumn{9}{l}{\textit{VLM-independent — trained on 4{,}135 flagged-partition frames}} \\",
-    "vlm_dependent": r"\multicolumn{9}{l}{\textit{VLM-dependent variants — trained on 4{,}135 flagged-partition frames}} \\",
-    "rule_ablations": r"\multicolumn{9}{l}{\textit{Triage rule ablations (offline replay)}} \\",
-    "new_variants": r"\multicolumn{9}{l}{\textit{Limitation fixes and two-VLM consensus (offline replay)}} \\",
+    "baseline": r"\multicolumn{9}{l}{\textit{Human reference}} \\",
+    "vlm_independent": r"\multicolumn{9}{l}{\textit{VLM-independent — trained on 4{,}110 flagged-partition frames}} \\",
+    "vlm_dependent": r"\multicolumn{9}{l}{\textit{VLM-dependent — trained on 4{,}110 flagged-partition frames}} \\",
 }
 
 WEATHER_ROWS = [
-    ("shared_gt_fusion", "SAM (curated)", "--"),
+    ("human_verified_fusion", "Human-verified", "--"),
     ("shared_raw_sam_fusion", "Raw SAM", "--"),
     ("shared_swin_only_fusion", "Swin only", "--"),
-    ("shared_swin_discovery_noVLM_ccm_fusion|shared_swin_discovery_noVLM_fusion",
-     "Swin + disc.\\ (no VLM)", "--"),
-    ("qwen_swin_discovery_ccm_fusion|qwen_swin_discovery_fusion", "Swin + disc.", "Qwen2.5-VL-72B"),
-    ("llava_swin_discovery_ccm_fusion|llava_swin_discovery_fusion", "Swin + disc.", "LLaVA-1.6-34B"),
-    ("qwen_full_fusion", "Triage + disc.", "Qwen2.5-VL-72B"),
+    ("shared_swin_discovery_noVLM_ccm_fusion", "Swin + disc.\\ (no VLM)", "--"),
     ("llava_full_fusion", "Triage + disc.", "LLaVA-1.6-34B"),
+    ("qwen_full_fusion", "Triage + disc.", "Qwen2.5-VL-72B"),
 ]
 
 MODALITY_GROUPS = [
     ("SAM (curated) baseline — clean partition", "--",
      [("shared_gt_rgb", "RGB"), ("shared_gt_lidar", "LiDAR"), ("shared_gt_fusion", "CrossFusion")]),
-    # RGB/LiDAR sub-rows for the VLM discovery variants were trained on
-    # bbox-rectangle-corrupted annotations and have been dropped rather than
-    # retrained (see eval-protocol memory); only CrossFusion (exact-mask
-    # retrain pending) remains per VLM.
-    ("Swin + disc.\\ — Qwen2.5-VL-72B", "Qwen2.5-VL-72B",
-     [("qwen_swin_discovery_ccm_fusion|qwen_swin_discovery_fusion", "CrossFusion")]),
-    ("Swin + disc.\\ — LLaVA-1.6-34B", "LLaVA-1.6-34B",
-     [("llava_swin_discovery_ccm_fusion|llava_swin_discovery_fusion", "CrossFusion")]),
 ]
 
 
@@ -106,33 +90,43 @@ def write_ablation(variants, boots, out: Path):
     # bold = best value per metric column among available rows
     stems = [s for s, label, *_ in ABLATION_ROWS if label and s in available]
     pes = {s: point_estimates(variants[s]) for s in stems}
+    # A planned run with no dump yet is rendered as a pending row rather than
+    # dropped, so the table always shows the full experiment and a reader can
+    # see what is outstanding. With no dumps at all the whole table is pending.
     best = {
-        "veh": max(pes[s]["per_class"][0] for s in stems),
-        "sign": max(pes[s]["per_class"][1] for s in stems),
-        "human": max(pes[s]["per_class"][2] for s in stems),
-        "miou": max(pes[s]["miou"] for s in stems),
-        "fw": max(pes[s]["fw_iou"] for s in stems),
+        "veh": max((pes[s]["per_class"][0] for s in stems), default=None),
+        "sign": max((pes[s]["per_class"][1] for s in stems), default=None),
+        "human": max((pes[s]["per_class"][2] for s in stems), default=None),
+        "miou": max((pes[s]["miou"] for s in stems), default=None),
+        "fw": max((pes[s]["fw_iou"] for s in stems), default=None),
     }
-    n_frames = sum(len(variants[stems[0]]["conditions"][c]["frames"])
-                   for c in variants[stems[0]]["conditions"])
+    n_frames = (sum(len(variants[stems[0]]["conditions"][c]["frames"])
+                    for c in variants[stems[0]]["conditions"]) if stems else 0)
 
     lines = [
         r"\begin{table*}[t]",
         r"\centering",
         r"\caption{Annotation variant ablation on CLFTv2-Base (RGB--LiDAR CrossFusion).",
-        r"         All variants are evaluated on the same " + str(n_frames)
-        + r" clean-partition test frames against the manually curated annotations,",
+        r"         All variants are evaluated on the same " + (str(n_frames) if n_frames else "held-out")
+        + r" test frames against the human-verified reference,",
         r"         so scores are directly comparable across rows.",
         r"         mIoU averages vehicle, sign, and human (cyclist + pedestrian combined) and is the mean over the five weather-condition mIoUs;",
         r"         fw-IoU weights each class by its pixel frequency.",
-        r"         95\% CIs are from a paired bootstrap over test frames (10{,}000 resamples, stratified by weather condition).",
-        r"         Bold marks the best result in each metric column.}",
+        r"         The last column reports the \emph{paired} difference in mIoU against the "
+        + REFERENCE_LABEL + r" variant, with a 95\% CI from a bootstrap over test frames",
+        r"         (10{,}000 resamples, stratified by weather condition; the same resample indices are applied to every variant).",
+        r"         A paired difference is the statistic this design supports: all variants are evaluated on the same frames,",
+        r"         so per-variant marginal CIs overlap far more than the differences themselves and understate the separation.",
+        r"         An interval excluding zero means the variant differs significantly from " + REFERENCE_LABEL + r".",
+        r"         Bold marks the best result in each metric column.",
+        r"         Rows without numbers are planned runs whose checkpoints do not exist yet.}",
         r"\label{tab:ablation}",
         r"\resizebox{\textwidth}{!}{%",
         r"\begin{tabular}{llc ccccc l}",
         r"\toprule",
         r"\textbf{Variant} & \textbf{Description} & \textbf{VLM} &",
-        r"  \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & \textbf{95\% CI (mIoU)} \\",
+        r"  \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & "
+        r"\textbf{$\Delta$mIoU vs " + REFERENCE_LABEL + r" (95\% CI)} \\",
         r"\midrule",
     ]
     # drop section headers whose rows are all missing
@@ -155,28 +149,68 @@ def write_ablation(variants, boots, out: Path):
                 pending_space = False
             continue
         if stem not in available:
-            print(f"  (ablation) missing dump, row skipped: {stem}")
+            print(f"  (ablation) no dump yet, row rendered as pending: {stem}")
+            lines.append(f"{label} & {desc or ''} & {vlm} & "
+                         + " & ".join([r"\textemdash"] * 5)
+                         + r" & \textit{pending} \\")
+            pending_space = True
             continue
         pe = pes[stem]
-        lo, hi = ci(boots[stem])
+        if stem == REFERENCE_STEM:
+            delta_cell = r"\textemdash\ (reference)"
+        elif REFERENCE_STEM in boots:
+            d = boots[stem] - boots[REFERENCE_STEM]
+            lo, hi = ci(d)
+            point = 100 * (pe["miou"] - pes[REFERENCE_STEM]["miou"])
+            delta_cell = f"${point:+.1f}$ [{100 * lo:+.1f}, {100 * hi:+.1f}]"
+        else:
+            # No reference dump — fall back to the marginal CI rather than
+            # silently printing a difference against nothing.
+            lo, hi = ci(boots[stem])
+            delta_cell = f"[{100 * lo:.1f}, {100 * hi:.1f}] (marginal)"
         cells = [
             fmt(pe["per_class"][0], pe["per_class"][0] == best["veh"]),
             fmt(pe["per_class"][1], pe["per_class"][1] == best["sign"]),
             fmt(pe["per_class"][2], pe["per_class"][2] == best["human"]),
             fmt(pe["miou"], pe["miou"] == best["miou"]),
             fmt(pe["fw_iou"], pe["fw_iou"] == best["fw"]),
-            f"[{100 * lo:.1f}, {100 * hi:.1f}]",
+            delta_cell,
         ]
         desc_cell = desc if desc is not None else ""
-        lines.append(f"{label} & {desc_cell} & {vlm} & " + " & ".join(cells) + r" \\")
+        mark = r"\textsuperscript{\dag}" if stem in SUPERSEDED_STEMS else ""
+        lines.append(f"{label}{mark} & {desc_cell} & {vlm} & " + " & ".join(cells) + r" \\")
         pending_space = True
-    lines += [r"\bottomrule", r"\end{tabular}}", r"\end{table*}"]
+    lines += [r"\bottomrule", r"\end{tabular}}"]
+    if any(s in available for s in SUPERSEDED_STEMS):
+        lines += [r"\\[2pt]", r"\footnotesize\textsuperscript{\dag} Superseded --- see caption."]
+    lines += [r"\end{table*}"]
     out.write_text("\n".join(lines) + "\n")
     print(f"wrote {out}")
 
 
+def _pending_table(out: Path, label: str, caption: str) -> None:
+    """Overwrite a table with an explicit placeholder.
+
+    Written rather than skipped on purpose: leaving the previous .tex in place
+    would keep numbers from checkpoints that no longer exist, and the paper
+    would still compile and still look finished.
+    """
+    out.write_text("\n".join([
+        r"\begin{table}[t]", r"\centering",
+        r"\caption{" + caption + r"}",
+        r"\label{" + label + r"}",
+        r"\begin{tabular}{l}", r"\toprule",
+        r"\textit{Pending — awaiting retrained checkpoints.} \\",
+        r"\bottomrule", r"\end{tabular}", r"\end{table}", "",
+    ]))
+    print(f"wrote {out} (pending placeholder)")
+
+
 def write_weather(variants, out: Path):
     rows = [(s, l, v) for s, l, v in WEATHER_ROWS if s in variants]
+    if not rows:
+        return _pending_table(out, "tab:weather_miou",
+                              "Per-weather mIoU and fw-IoU on CLFTv2-Base CrossFusion.")
     n = {c: len(variants[rows[0][0]]["conditions"][c]["frames"]) for c in WEATHER_ORDER}
     best_cond = {c: max(condition_miou(variants[s], c) for s, *_ in rows) for c in WEATHER_ORDER}
     best_miou = max(point_estimates(variants[s])["miou"] for s, *_ in rows)
@@ -211,6 +245,9 @@ def write_weather(variants, out: Path):
 
 
 def write_modality(variants, out: Path):
+    if not any(s in variants for _, _, g in MODALITY_GROUPS for s, _ in g):
+        return _pending_table(out, "tab:modality_ablation",
+                              "Modality ablation (RGB, LiDAR, CrossFusion) on CLFTv2-Base.")
     lines = [
         r"\begin{table}[t]",
         r"\centering",
@@ -272,7 +309,9 @@ def main():
             (resolve(stem) if "|" in stem else stem, modality) for stem, modality in group
         ])
 
-    boots = bootstrap(list(variants.values()), args.n_boot, seed=0)
+    # With no dumps on disk every row is pending, and there is nothing to
+    # resample — bootstrap() indexes the first variant's conditions.
+    boots = bootstrap(list(variants.values()), args.n_boot, seed=0) if variants else {}
 
     write_ablation(variants, boots, args.out_dir / "ablation.tex")
     write_weather(variants, args.out_dir / "weather_miou.tex")

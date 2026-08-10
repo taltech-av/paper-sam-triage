@@ -134,37 +134,53 @@ check("transport error -> degenerate", out.degenerate)
 check("run() still returns a bare string", _StubAgent(_Client("alpha"), None).run(None) == "alpha")
 
 print("\nReplay: the real 2026-06 run")
-runs = {}
-for tag in ("qwen2.5vl_72b", "llava_34b"):
-    # Via config so the replay follows the project's data root instead of
-    # carrying a second copy of it that silently goes stale when the disk moves.
-    files = sorted(glob.glob(str(config.DATA_ROOT / "vlm" / tag / "results" / "*.json")))
-    if not files:
-        print(f"  skip {tag} — results not on this machine")
-        continue
-    caught = missed = false_pos = clean_n = 0
-    for path in files:
-        for entry in json.loads(open(path).read()).get("discovered", []):
-            raw = entry.get("vlm_response")
-            known_bad = raw is not None and set(str(raw)) == {"?"}
-            flagged = looks_degenerate(raw)
-            if known_bad:
-                caught += flagged
-                missed += not flagged
-            else:
-                clean_n += 1
-                false_pos += flagged
-    runs[tag] = (caught, missed, clean_n, false_pos)
-    print(f"  {tag}: corrupted={caught + missed} detected={caught} missed={missed} "
-          f"| clean={clean_n} false_positives={false_pos}")
 
-if "qwen2.5vl_72b" in runs:
-    caught, missed, clean_n, false_pos = runs["qwen2.5vl_72b"]
+
+def score(responses: dict[str, int]) -> tuple[int, int, int, int]:
+    """(detected, missed, clean, false_positives) over {response: count}."""
+    caught = missed = clean_n = false_pos = 0
+    for raw, n in responses.items():
+        known_bad = raw is not None and set(str(raw)) == {"?"}
+        flagged = looks_degenerate(raw)
+        if known_bad:
+            caught += n * flagged
+            missed += n * (not flagged)
+        else:
+            clean_n += n
+            false_pos += n * flagged
+    return caught, missed, clean_n, false_pos
+
+
+# The 5.2 GB incident run was deleted on 2026-08-10 once the corrected v2 run
+# superseded it. Its discovery responses collapse to six distinct strings, so
+# the corpus this replay needs survives as a <1 KB fixture — the assertions
+# below are the same ones that ran against the full run.
+fixture = pathlib.Path(__file__).parent / "tests" / "incident_2026_06_responses.json"
+if fixture.exists():
+    data = json.loads(fixture.read_text())
+    responses = {(None if k == "__NULL__" else k): v
+                 for k, v in data["responses"].items()}
+    caught, missed, clean_n, false_pos = score(responses)
+    print(f"  {data['source_tag']} (fixture, {data['frames']} frames): "
+          f"corrupted={caught + missed} detected={caught} missed={missed} "
+          f"| clean={clean_n} false_positives={false_pos}")
     check("detects every corrupted qwen response", missed == 0, f"{missed} missed")
     check("no false positives on qwen's clean responses", false_pos == 0, f"{false_pos}")
     check("the incident is actually large", caught > 40000, f"{caught}")
-if "llava_34b" in runs:
-    _, _, clean_n, false_pos = runs["llava_34b"]
+else:
+    print(f"  skip — fixture missing: {fixture}")
+
+# LLaVA is the false-positive control and its run is still on disk.
+files = sorted(glob.glob(str(config.DATA_ROOT / "vlm" / "llava_34b" / "results" / "*.json")))
+if not files:
+    print("  skip llava_34b — results not on this machine")
+else:
+    counts: dict[str, int] = {}
+    for path in files:
+        for entry in json.loads(open(path).read()).get("discovered", []):
+            counts[entry.get("vlm_response")] = counts.get(entry.get("vlm_response"), 0) + 1
+    _, _, clean_n, false_pos = score(counts)
+    print(f"  llava_34b: clean={clean_n} false_positives={false_pos}")
     check("no false positives across the whole llava run", false_pos == 0, f"{false_pos}")
 
 print()

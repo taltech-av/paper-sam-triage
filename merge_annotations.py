@@ -2,7 +2,7 @@
 """
 Two-VLM consensus annotations from stored results — no VLM inference needed.
 
-Joins the per-mask agent outputs of two runs (e.g. llava_34b + qwen2.5vl_72b,
+Joins the per-mask agent outputs of two runs (e.g. llava_34b + qwen2.5vl_72b_v2,
 same frames, same SAM masks), recomputes triage per model under the CURRENT
 deterministic rule (stored `triage` fields may predate rule changes), applies
 a consensus rule, and writes annotation PNGs for downstream CLFTv2 training.
@@ -22,9 +22,9 @@ on (frame_id, bbox_384)):
     none      no discovery objects
 
 Usage:
-    python merge_annotations.py --tag-a llava_34b --tag-b qwen2.5vl_72b \\
+    python merge_annotations.py --tag-a llava_34b --tag-b qwen2.5vl_72b_v2 \\
         --triage swin_only --discovery both
-    python merge_annotations.py --tag-a llava_34b --tag-b qwen2.5vl_72b \\
+    python merge_annotations.py --tag-a llava_34b --tag-b qwen2.5vl_72b_v2 \\
         --triage union --discovery both --stats-only
 """
 
@@ -113,7 +113,7 @@ def _consensus_discoveries(disc_a: list[dict], disc_b: list[dict],
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag-a", default="llava_34b", help="First run tag")
-    parser.add_argument("--tag-b", default="qwen2.5vl_72b", help="Second run tag")
+    parser.add_argument("--tag-b", default="qwen2.5vl_72b_v2", help="Second run tag")
     parser.add_argument("--triage", default="union",
                         choices=["union", "intersection", "swin_only"],
                         help="Triage consensus rule (default: union)")

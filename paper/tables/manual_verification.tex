@@ -1,0 +1,67 @@
+% Generated placeholder — fill from analyze_human_verification.py once the
+% visin `verify` job export is available. Region counts below are the sizes of
+% the labelling job actually built (make_label_bundle.py, 2026-08-10) and are
+% final; only the human columns are outstanding.
+\begin{table*}[t]
+\centering
+\caption{Manual verification of the flagged partition. A single \texttt{mask\_toggle} job over
+         all 4{,}110 frames, in which every SAM proposal and every Swin discovery candidate is
+         shown together and the labeller clicks whatever is wrong. The labeller is never told
+         which model produced what: both runs scored the same deterministic SAM proposals, so a
+         verdict on a mask is run-independent and attribution is done afterwards from the
+         per-mask record of each run's decision. \emph{Incorrect} is the share a human rejected.
+         Discovery candidates are split by \emph{kind}: \emph{standalone} candidates are regions
+         SAM missed entirely, where precision is what discovery recovers; \emph{fringe}
+         candidates are the rim left around an object SAM already covered, where precision is
+         boundary completion. The two are not pooled, because a pooled number reads as recall
+         gain while being mostly the latter.}
+\label{tab:manual_verification}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrr}
+\toprule
+\textbf{Source} & \textbf{Kind} & \textbf{Regions} & \textbf{Incorrect} & \textbf{Incorrect \%} \\
+\midrule
+SAM proposals            & ---        & 90{,}176 & --- & --- \\
+Discovery candidates     & standalone & 16{,}402 & --- & --- \\
+Discovery candidates     & fringe     & 38{,}850 & --- & --- \\
+\midrule
+\textbf{Total}           &            & \textbf{145{,}428} & --- & --- \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+% ---------------------------------------------------------------------------
+
+\begin{table*}[t]
+\centering
+\caption{Agreement of each automated decision with the human verdict, on the same 4{,}110 frames.
+         Every mask carries both runs' decisions, so one human pass scores all three sources.
+         For triage, a \emph{false accept} is a mask the pipeline kept that the human rejected —
+         the error that puts wrong pixels into a training label — and a \emph{false reject} is a
+         mask it deleted that the human kept, which destroys real pixels. The two costs are not
+         symmetric and are therefore reported apart rather than as a single accuracy.
+         Swin-only is included because it is the strongest annotation variant and uses no VLM at
+         all; if it matches human judgement as closely as the VLM does, the VLM stage is not
+         earning its cost.}
+\label{tab:human_agreement}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+\textbf{Decision source} & \textbf{Masks judged} & \textbf{False accept \%} & \textbf{False reject \%}
+  & \textbf{Precision} & \textbf{Recall} & \textbf{F1} \\
+\midrule
+\multicolumn{7}{l}{\textit{Mask triage — keep or delete a SAM proposal}} \\
+Swin only (no VLM)            & --- & --- & --- & --- & --- & --- \\
+LLaVA-1.6-34B triage          & --- & --- & --- & --- & --- & --- \\
+Qwen2.5-VL-72B triage         & --- & --- & --- & --- & --- & --- \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Discovery confirmation — standalone candidates only}} \\
+LLaVA-1.6-34B                 & --- & --- & --- & --- & --- & --- \\
+Qwen2.5-VL-72B                & --- & --- & --- & --- & --- & --- \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Discovery confirmation — fringe candidates}} \\
+LLaVA-1.6-34B                 & --- & --- & --- & --- & --- & --- \\
+Qwen2.5-VL-72B                & --- & --- & --- & --- & --- & --- \\
+\bottomrule
+\end{tabular}}
+\end{table*}

@@ -58,13 +58,13 @@ precision on standalone candidates is what discovery *recovers*, and precision o
 fringes is boundary completion on objects the pipeline already had. A single
 pooled number over both would read as recall gain and be mostly the latter.
 
-**By default the job carries standalone candidates only** (`--candidates all`
-includes fringes). `kind` is pure geometry, so nothing is lost by deciding it
-without a human: the fringe share is measurable either way and lands in the
-sidecar regardless. What a labeler's time buys is the answer to the question only
-a human can settle — is this thing SAM missed entirely a real object — and
-spending two thirds of the discovery budget on rims around objects the pipeline
-already had would buy an answer to a question the paper does not ask.
+**The job carries every candidate, both kinds.** There is no partial mode: a
+bundle that omits fringes leaves pixels the pipeline writes into
+`annotation_full` unverified, so the cleaned annotation set could not be used as
+a training label without a second labelling pass over exactly the regions the
+first pass skipped. Reporting stays separable regardless, because `kind` is pure
+geometry and rides in the sidecar — standalone and fringe precision are computed
+apart downstream, which is where the distinction matters.
 
 masks.json carries a mask's **whole** provenance — triage per run, confirmation
 per run, stratum, kind, raw scores — because label-service hands every field back
@@ -502,8 +502,6 @@ def build_frames(args, report: dict) -> Iterator[dict]:
             # boundary fringe is a result in itself, and it is measured on the
             # whole pool whether or not a human is asked about all of it.
             kinds.update((row["kind"], row["stratum"]) for row in candidates)
-            if args.candidates == "standalone":
-                candidates = [row for row in candidates if row["kind"] == "standalone"]
 
         masks = sam_rows + candidates
         if len(masks) > MAX_MASKS_PER_FRAME:
@@ -571,15 +569,12 @@ def write_bundle(frames: Iterator[dict], args) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--tags", nargs="+", default=["llava_34b", "qwen2.5vl_72b"],
+    parser.add_argument("--tags", nargs="+", default=["llava_34b", "qwen2.5vl_72b_v2"],
                         help="VLM run tags whose decisions ride along in masks.json")
     parser.add_argument("--out", type=Path, help=f"default: <DATA_ROOT>/label_bundles/{ANNOTATION_SET}.zip")
     parser.add_argument("--frames", type=int, default=0,
                         help="frames in the job; the default takes the whole corpus, and a smaller "
                              "number thins it by even stride")
-    parser.add_argument("--candidates", choices=["standalone", "all"], default="standalone",
-                        help="standalone (default) leaves boundary fringes out of the job — see the "
-                             "module docstring; either way both kinds are counted and reported")
     parser.add_argument("--jpeg-quality", type=int, default=90)
     args = parser.parse_args()
 
@@ -601,8 +596,7 @@ def main() -> None:
           f"{counts['sam']} SAM masks + {counts['discovery']} discovery candidates "
           f"({sum(counts.values()) / len(kept):.1f} per frame)")
     print(f"  candidate pool on these frames: {totals.get('standalone', 0)} standalone, "
-          f"{totals.get('fringe', 0)} fringes of an existing SAM mask"
-          + (" — fringes left out of the job" if args.candidates == "standalone" else ""))
+          f"{totals.get('fringe', 0)} fringes of an existing SAM mask — both in the job")
     print("\nUpload once, then create a single mask_toggle job on annotation set "
           f"'{ANNOTATION_SET}' with 'All frames'. Every field above rides in masks.json and comes "
           "back out of the job export, so the zip is the only artefact to keep.")
