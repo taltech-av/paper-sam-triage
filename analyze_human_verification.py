@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Score the pipeline's agents against human verdicts from the visin labeling platform.
+Score the pipeline against human verdicts from the visin labeling platform.
 
 Input is the export of the single `verify` job — CSV, long format, one row per
 labeler per mask. That is the only required input: label-service carries every
@@ -31,6 +31,14 @@ separately:
                the VLMs, and the masks where the two runs' triage disagrees are
                adjudicated.
 
+               Beyond the agents as shipped, *every* triage variant is replayed
+               over these masks and scored (the VARIANTS section). A variant is a
+               deterministic function of stored agent outputs, so it can be
+               replayed offline and ranked directly against the human reference —
+               no training run, no GPU. Downstream mIoU ranks the same variants
+               only indirectly, at one GPU job each, and returns intervals wide
+               enough that most variants are indistinguishable.
+
   discovery    Precision per confirmation stratum, and the estimate that follows
                from it: how many of the 45,882 candidates LLaVA confirmed and the
                9,878 Qwen confirmed are real objects. The downstream mIoU
@@ -46,6 +54,15 @@ separately:
                read as recall gain while being mostly boundary growth, so the two
                get separate tables and separate extrapolations.
 
+Read F1 here with care, and prefer the error budget printed beside it. A retained
+wrong mask injects wrong pixels into a training label; a dropped good mask only
+omits them. F1 weights the two equally, so it rewards the rule that keeps
+everything whenever the base rate is high — which is why `raw_sam` tops the F1
+column while losing the measured mIoU ladder. `bad kept` (share of
+human-rejected masks a rule retains) and `good lost` (share of human-accepted
+masks it deletes) separate the two error directions and are the columns to rank
+variants on.
+
 A mask_toggle labeler clicks only what is wrong, but the export is still
 exhaustive: label-service writes one row per mask per answer and reads a mask's
 verdict as `incorrect` iff the labeler clicked it (`exportService.ts`,
@@ -54,26 +71,46 @@ in the *export*. A row with no labeler on it is the other case the export
 distinguishes — a task nobody has reached yet — and those are counted as pending
 rather than scored.
 
+Partial exports are the intended case, not a degraded one: labelling a few frames
+first confirms the export joins, the rules evaluate and the numbers are sane
+before committing to the full set. Coverage and labelling pace are therefore
+reported before any score, and every rate carries the mask count it rests on.
+
 All confidence intervals resample *frames*, not masks: masks in one frame share a
 scene, an exposure and a labeler's calibration, so a per-mask bootstrap would
 treat ~35 correlated judgements as independent and report intervals that are far
 too tight.
 
 Usage:
+    python analyze_human_verification.py --export verify_export.csv
     python analyze_human_verification.py --export verify_export.csv \\
         --manifest job-<id>.manifest.json \\
         --latex-out paper/tables/human_discovery.tex
+
+The whole report is written to a file as well as the terminal — next to the
+export by default, or wherever `--out` says.
 """
 
 import argparse
 import csv
 import json
+import sys
 from collections import Counter, defaultdict
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import numpy as np
 
+import config
+from replay_triage import VARIANTS
+
 CORRECT, INCORRECT = "correct", "incorrect"
+TRIAGE_REJECT = "reject"
+
+# Variants whose decision needs state the bundle sidecar does not carry —
+# correction-agent output, Swin bypass, class id. They are still scored; the join
+# to `results/` supplies it, and they are the reason that join exists.
+NEEDS_FULL_STATE = {"with_bypass", "lidar_class_aware", "limits_fixed", "background_protected"}
 
 
 # --------------------------------------------------------------------------
@@ -81,21 +118,31 @@ CORRECT, INCORRECT = "correct", "incorrect"
 # --------------------------------------------------------------------------
 
 
+_NUMERIC_START = frozenset("0123456789+-.")
+
+
 def scalar(text: str):
-    """CSV is all strings; put the bundle's own types back."""
+    """CSV is all strings; put the bundle's own types back.
+
+    The export is ~3M field values and most are words (`valid`, `pass`, `sam`) or
+    bracketed bboxes, so trying int() then float() on everything means two raised
+    exceptions per value. Only a leading digit, sign or point can begin a number,
+    so that check short-circuits the common case.
+    """
     if text in ("true", "True"):
         return True
     if text in ("false", "False"):
         return False
-    for cast in (int, float):
-        try:
-            return cast(text)
-        except ValueError:
-            pass
+    if text and text[0] in _NUMERIC_START:
+        for cast in (int, float):
+            try:
+                return cast(text)
+            except ValueError:
+                pass
     return text
 
 
-def load_masks(path: Path) -> tuple[list[dict], dict]:
+def load_masks(path: Path, include_unresolved: bool = False) -> tuple[list[dict], dict]:
     """
     One entry per mask, carrying its bundle metadata and every labeler's verdict.
 
@@ -108,15 +155,28 @@ def load_masks(path: Path) -> tuple[list[dict], dict]:
     pending: label-service emits a row for an unanswered task precisely so the
     denominator survives, and silently dropping them would report progress as
     completeness.
+
+    Scoring wants only the resolved masks, so those are what is returned by
+    default. `include_unresolved` keeps the pending and tied ones too, with
+    `human` set to None — which is what a *writer* needs: an annotation is only
+    clean if every mask in the frame was judged, and that question cannot be
+    answered from the resolved masks alone.
     """
     masks: dict[tuple[str, int], dict] = {}
     stats = Counter()
+    # A few hundred frame paths repeat across ~150k rows; Path().stem on each is
+    # pure overhead, so the stems are memoised.
+    stems: dict[str, str] = {}
     with path.open(newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None or "maskId" not in reader.fieldnames:
             raise SystemExit(f"{path} has no maskId column — this is a single_choice job export")
         for row in reader:
-            key = (Path(row["frame"]).stem, int(row["maskId"]))
+            frame = row["frame"]
+            stem = stems.get(frame)
+            if stem is None:
+                stem = stems[frame] = Path(frame).stem
+            key = (stem, int(row["maskId"]))
             if key not in masks:
                 masks[key] = {
                     "frame_id": key[0],
@@ -134,15 +194,22 @@ def load_masks(path: Path) -> tuple[list[dict], dict]:
     if not masks:
         raise SystemExit(f"No mask rows in {path}")
 
+    # Frames the job holds at all — the denominator coverage is measured against,
+    # so it comes from the export rather than a constant that can drift.
+    stats["frames_total"] = len({key[0] for key in masks})
+
     rows = []
     for mask in masks.values():
         if not mask["labelers"]:
             stats["pending"] += 1
+            if include_unresolved:
+                rows.append({**mask, "human": None})
             continue
         verdict = consensus(mask["labelers"])
         stats["tied" if verdict is None else "scored"] += 1
-        rows.append({**mask, "human": verdict})
-    if not rows:
+        if verdict is not None or include_unresolved:
+            rows.append({**mask, "human": verdict})
+    if not stats["scored"]:
         raise SystemExit("Every mask in the export is still unanswered")
     return rows, stats
 
@@ -165,6 +232,26 @@ def run_tags(rows: list[dict]) -> list[str]:
     return sorted({
         field.removeprefix("triage_") for row in rows for field in row if field.startswith("triage_")
     })
+
+
+def load_run_masks(tag: str, frame_ids: set[str]) -> dict[tuple[str, int], dict]:
+    """Per-(frame, mask_id) pipeline state for one run, for the labelled frames only.
+
+    The export alone cannot drive a variant replay: the bundle sidecar carries
+    what a labeller might be asked to group by, not the full agent state. The
+    results JSON is the authority for what each agent actually returned.
+    """
+    results = config.DATA_ROOT / "vlm" / tag / "results"
+    if not results.is_dir():
+        raise SystemExit(f"No results for tag '{tag}': {results}")
+    out: dict[tuple[str, int], dict] = {}
+    for frame_id in frame_ids:
+        path = results / f"{frame_id}.json"
+        if not path.exists():
+            continue
+        for mask in json.loads(path.read_text()).get("masks", []):
+            out[(frame_id, mask["mask_id"])] = mask
+    return out
 
 
 def stratum_population(manifest: dict | None) -> dict[str, int]:
@@ -190,22 +277,110 @@ def stratum_population(manifest: dict | None) -> dict[str, int]:
 # --------------------------------------------------------------------------
 
 
-def bootstrap_ci(rows: list[dict], statistic, iterations: int, seed: int) -> tuple[float, float] | None:
-    """Percentile CI over frames resampled with replacement (frame = cluster)."""
-    by_frame: dict[str, list[dict]] = defaultdict(list)
-    for row in rows:
-        by_frame[row["frame_id"]].append(row)
-    frames = list(by_frame.values())
+def bootstrap_ci(frame_ids, terms, statistic, iterations: int, seed: int,
+                 block: int = 1024) -> tuple[float, float] | None:
+    """Percentile CI over frames resampled with replacement (frame = cluster).
+
+    Every statistic reported here — F1, a precision, a rate — is a function of
+    sums that are *additive over rows*: tp/fp/fn counts, positives, denominators.
+    So a resample never has to touch a row. The per-row terms are summed once
+    into a (frame x term) table, and a resample is then a vector of how many
+    times each frame was drawn, times that table. Ten thousand resamples become
+    one matrix product instead of ten thousand passes over the masks, which is
+    the difference between half an hour and a few milliseconds per interval.
+
+    Drawing frame counts from a multinomial is the same experiment as drawing
+    `n_frames` frame indices with replacement and tallying them; it just skips
+    materialising the indices.
+
+    `terms` is (n_rows, k). `statistic` maps resampled sums, shape (m, k), to m
+    values, NaN where the statistic is undefined on that resample — those are
+    dropped, and an interval is refused if fewer than half the resamples define
+    it, matching the old row-wise contract of returning None.
+    """
+    codes, n_frames = _frame_codes(frame_ids)
+    terms = np.asarray(terms, dtype=np.float64)
+    per_frame = np.column_stack([
+        np.bincount(codes, weights=terms[:, column], minlength=n_frames)
+        for column in range(terms.shape[1])
+    ])
+
     rng = np.random.default_rng(seed)
+    probabilities = np.full(n_frames, 1.0 / n_frames)
     samples = []
-    for _ in range(iterations):
-        picked = [frames[i] for i in rng.integers(0, len(frames), len(frames))]
-        value = statistic([row for frame in picked for row in frame])
-        if value is not None:
-            samples.append(value)
-    if len(samples) < iterations // 2:
+    for start in range(0, iterations, block):
+        draws = rng.multinomial(n_frames, probabilities, size=min(block, iterations - start))
+        samples.append(statistic(draws @ per_frame))
+    values = np.concatenate(samples)
+    values = values[np.isfinite(values)]
+    if values.size < iterations // 2:
         return None
-    return float(np.percentile(samples, 2.5)), float(np.percentile(samples, 97.5))
+    return float(np.percentile(values, 2.5)), float(np.percentile(values, 97.5))
+
+
+def _frame_codes(frame_ids) -> tuple[np.ndarray, int]:
+    """Frame ids to contiguous integer codes, for use as bincount cluster labels."""
+    _, codes = np.unique(np.asarray(frame_ids), return_inverse=True)
+    return codes, int(codes.max()) + 1 if codes.size else 0
+
+
+def f1_ci(rows: list[dict], predicted, iterations: int, seed: int) -> tuple[float, float] | None:
+    """95% CI on F1 (percent) for a binary prediction over `rows`."""
+    if not iterations:
+        return None
+    predicted = np.asarray(predicted, dtype=bool)
+    actual = np.asarray([row["human"] == CORRECT for row in rows], dtype=bool)
+    terms = np.column_stack([predicted & actual, predicted & ~actual, ~predicted & actual])
+    return bootstrap_ci([row["frame_id"] for row in rows], terms, _f1_of, iterations, seed)
+
+
+def rate_ci(rows: list[dict], positive, iterations: int, seed: int) -> tuple[float, float] | None:
+    """95% CI on the share of rows satisfying `positive` (a fraction, as `rate`)."""
+    if not iterations:
+        return None
+    flags = np.asarray([bool(positive(row)) for row in rows], dtype=float)
+    terms = np.column_stack([flags, np.ones_like(flags)])
+    return bootstrap_ci([row["frame_id"] for row in rows], terms, _rate_of, iterations, seed)
+
+
+def paired_delta_ci(rows: list[dict], predicted_a, predicted_b,
+                    iterations: int, seed: int) -> tuple[float, float] | None:
+    """95% CI on F1(a) − F1(b) over the same masks, resampled by frame.
+
+    The two runs decide on identical masks, so the comparison is paired and the
+    difference is far better determined than the gap between two independent
+    intervals suggests. Both F1s are recomputed inside each resample, which is
+    what makes the interval paired rather than a difference of marginals.
+    """
+    if not iterations:
+        return None
+    actual = np.asarray([row["human"] == CORRECT for row in rows], dtype=bool)
+    a, b = np.asarray(predicted_a, dtype=bool), np.asarray(predicted_b, dtype=bool)
+    terms = np.column_stack([
+        a & actual, a & ~actual, ~a & actual,
+        b & actual, b & ~actual, ~b & actual,
+    ])
+    return bootstrap_ci([row["frame_id"] for row in rows], terms,
+                        lambda sums: _f1_of(sums[:, :3]) - _f1_of(sums[:, 3:]),
+                        iterations, seed)
+
+
+def _f1_of(sums: np.ndarray) -> np.ndarray:
+    """F1 in percent from summed (tp, fp, fn); NaN where the old code returned None.
+
+    tp == 0 is exactly that case: either a denominator is empty, or precision and
+    recall are both zero and their harmonic mean is undefined.
+    """
+    tp, fp, fn = sums[:, 0], sums[:, 1], sums[:, 2]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(tp > 0, 100 * 2 * tp / (2 * tp + fp + fn), np.nan)
+
+
+def _rate_of(sums: np.ndarray) -> np.ndarray:
+    """Share of positives from summed (positives, rows)."""
+    total = sums[:, 1]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(total > 0, sums[:, 0] / total, np.nan)
 
 
 def rate(rows: list[dict], positive) -> float | None:
@@ -214,18 +389,26 @@ def rate(rows: list[dict], positive) -> float | None:
 
 def classification(rows: list[dict], predicts_correct) -> dict[str, float] | None:
     """Accuracy/precision/recall/F1 with positive = 'the human called this mask correct'."""
-    tp = fp = fn = tn = 0
-    for row in rows:
-        predicted, actual = predicts_correct(row), row["human"] == CORRECT
-        if predicted and actual:
-            tp += 1
-        elif predicted and not actual:
-            fp += 1
-        elif not predicted and actual:
-            fn += 1
-        else:
-            tn += 1
-    total = tp + fp + fn + tn
+    return metrics([predicts_correct(row) for row in rows],
+                   [row["human"] == CORRECT for row in rows])
+
+
+def metrics(predicted, actual) -> dict[str, float] | None:
+    """The same scores from two aligned boolean sequences, for callers holding arrays.
+
+    `bad_kept` and `good_lost` are the error budget: the share of human-rejected
+    masks the rule retains, and the share of human-accepted masks it deletes.
+    They are the two error directions F1 pools, and they are not interchangeable
+    downstream — a kept bad mask paints wrong pixels into the training label,
+    a lost good mask only leaves them unlabelled.
+    """
+    predicted = np.asarray(predicted, dtype=bool)
+    actual = np.asarray(actual, dtype=bool)
+    total = int(predicted.size)
+    tp = int(np.count_nonzero(predicted & actual))
+    fp = int(np.count_nonzero(predicted & ~actual))
+    fn = int(np.count_nonzero(~predicted & actual))
+    tn = total - tp - fp - fn
     if total == 0 or tp + fp == 0 or tp + fn == 0:
         return None
     precision, recall = tp / (tp + fp), tp / (tp + fn)
@@ -236,6 +419,8 @@ def classification(rows: list[dict], predicts_correct) -> dict[str, float] | Non
         "prec": 100 * precision,
         "rec": 100 * recall,
         "f1": 100 * 2 * precision * recall / (precision + recall),
+        "bad_kept": 100 * fp / (fp + tn) if fp + tn else float("nan"),
+        "good_lost": 100 * fn / (tp + fn),
         "n": total,
     }
 
@@ -254,17 +439,99 @@ def cohen_kappa(rows: list[dict]) -> tuple[float, int] | None:
     return (observed - expected) / (1 - expected), len(pairs)
 
 
-def show(label: str, metrics: dict | None, ci: tuple[float, float] | None = None, key: str = "f1") -> None:
-    if metrics is None:
-        print(f"  {label:<34} (not estimable)")
+def show(label: str, scores: dict | None, ci: tuple[float, float] | None = None, note: str = "") -> None:
+    """One scored rule per line: accuracy block, F1 with its CI, then the error budget."""
+    suffix = f"  {note}" if note else ""
+    if scores is None:
+        print(f"  {label:<32} (not estimable){suffix}")
         return
-    interval = f"  [{ci[0]:.1f}, {ci[1]:.1f}]" if ci else ""
-    print(f"  {label:<34} acc {metrics['acc']:5.1f}  prec {metrics['prec']:5.1f}  "
-          f"rec {metrics['rec']:5.1f}  F1 {metrics[key]:5.1f}{interval}  (n={metrics['n']})")
+    interval = f" [{ci[0]:5.1f},{ci[1]:5.1f}]" if ci else " " * 14
+    print(f"  {label:<32} n={scores['n']:>6}  acc {scores['acc']:5.1f}  prec {scores['prec']:5.1f}  "
+          f"rec {scores['rec']:5.1f}  F1 {scores['f1']:5.1f}{interval}  "
+          f"bad kept {scores['bad_kept']:5.1f}  good lost {scores['good_lost']:5.1f}{suffix}")
+
+
+def header(title: str) -> None:
+    print("\n" + "=" * 116)
+    print(f"  {title}")
+    print("=" * 116)
 
 
 # --------------------------------------------------------------------------
-# Triage job
+# Coverage
+# --------------------------------------------------------------------------
+
+
+def report_coverage(export: Path, rows: list[dict], stats: dict, tags: list[str]) -> None:
+    """What has actually been labelled, before any score is quoted."""
+    sam_rows = [row for row in rows if row.get("source", "sam") == "sam"]
+    disc_rows = [row for row in rows if row.get("source") == "discovery"]
+    frames = {row["frame_id"] for row in rows}
+
+    header("COVERAGE")
+    print(f"  runs in the export       {', '.join(tags) or '(none named)'}")
+    print(f"  frames labelled          {len(frames):,} of {stats['frames_total']:,} "
+          f"({100 * len(frames) / stats['frames_total']:.1f}%)")
+    print(f"  masks scored             {stats['scored']:,}")
+    if stats["pending"]:
+        print(f"  masks still unanswered   {stats['pending']:,}  (excluded)")
+    if stats["tied"]:
+        print(f"  masks tied between labellers {stats['tied']:,}  (excluded — a split is not evidence)")
+    print(f"    SAM proposals          {len(sam_rows):,}")
+    print(f"    discovery candidates   {len(disc_rows):,}")
+    if disc_rows:
+        print(f"      by kind              {dict(Counter(row.get('kind') for row in disc_rows))}")
+    progress(export, stats["frames_total"])
+    if len(frames) < 25:
+        print("\n  NOTE: few frames labelled. Treat the numbers below as a pipeline check,"
+              "\n        not a result — frame-clustered CIs need many more frames to be"
+              "\n        informative, and rules that differ on rare masks may not differ here.")
+
+
+def progress(export: Path, total_frames: int) -> None:
+    """Labelling pace and time-to-completion, from the export's own timings.
+
+    The unit of work is a *frame*, not a region: a task is one frame, the
+    labeller toggles all of its masks in one sitting, and `elapsedMs` is the time
+    on that task repeated onto every mask row of the frame. Averaging it per row
+    therefore overstates the remaining work by the number of masks per frame —
+    roughly 35x on this corpus. Pace is deduplicated per frame here.
+
+    Two paces are reported: over every frame answered, and over the most recent
+    quarter. They differ a lot early on, since the first frames carry interface
+    learning, and the recent figure is the one that predicts what is left.
+    """
+    per_frame: dict[str, tuple[str, int]] = {}
+    with export.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            if not row.get("userEmail") or not row.get("elapsedMs"):
+                continue
+            try:
+                ms = int(row["elapsedMs"])
+            except ValueError:
+                continue
+            per_frame.setdefault(Path(row["frame"]).stem, (row.get("answeredAt") or "", ms))
+    if not per_frame:
+        return
+    ordered = [ms for _, (_, ms) in sorted(per_frame.items(), key=lambda item: item[1][0])]
+    recent = ordered[-max(len(ordered) // 4, 1):]
+    med = sorted(ordered)[len(ordered) // 2] / 1000
+    med_recent = sorted(recent)[len(recent) // 2] / 1000
+    done = len(per_frame)
+
+    print(f"\n  PROGRESS  {done:,} frames answered   {sum(ordered) / 3.6e6:.1f} h spent")
+    print(f"    pace, all frames   {med:5.1f} s/frame")
+    print(f"    pace, recent 25%   {med_recent:5.1f} s/frame"
+          + ("   (speeding up)" if med_recent < med * 0.9 else ""))
+    for label, per in (("all", med), ("recent", med_recent)):
+        hrs = (total_frames - done) * per / 3600
+        print(f"    ETA at {label:6} pace  {hrs:6.1f} h remaining"
+              f"   = {hrs / 7:4.1f} h/day for a week"
+              f"   |  {hrs / 14:4.1f} h/day for two")
+
+
+# --------------------------------------------------------------------------
+# SAM proposals — the agents as shipped
 # --------------------------------------------------------------------------
 
 
@@ -284,8 +551,9 @@ def signals(tags: list[str]) -> dict[str, callable]:
 def report_triage(all_rows: list[dict], tags: list[str], args) -> None:
     rows = [row for row in all_rows if row["human"]]
     human_correct = rate(rows, lambda row: row["human"] == CORRECT)
-    print(f"\n{len(rows)} masks over {len({row['frame_id'] for row in rows})} frames; "
-          f"humans called {100 * human_correct:.1f}% correct")
+    print(f"\n{len(rows):,} masks over {len({row['frame_id'] for row in rows}):,} frames; "
+          f"humans called {100 * human_correct:.1f}% correct "
+          f"({sum(1 for row in rows if row['human'] == INCORRECT):,} rejected)")
 
     kappa = cohen_kappa(all_rows)
     if kappa:
@@ -295,45 +563,39 @@ def report_triage(all_rows: list[dict], tags: list[str], args) -> None:
 
     print("\nAgent accuracy vs human reference (positive = mask is correct):")
     for label, predicts in signals(tags).items():
-        metrics = classification(rows, predicts)
-        ci = bootstrap_ci(rows, lambda sub, p=predicts: (classification(sub, p) or {}).get("f1"),
-                          args.iterations, args.seed) if metrics else None
-        show(label, metrics, ci)
+        predicted = [bool(predicts(row)) for row in rows]
+        scores = metrics(predicted, [row["human"] == CORRECT for row in rows])
+        ci = f1_ci(rows, predicted, args.bootstrap, args.seed) if scores else None
+        show(label, scores, ci)
 
     print("\nPer class (F1 of each run's BBox verdict):")
     for class_name in sorted({row["class"] for row in rows}):
         subset = [row for row in rows if row["class"] == class_name]
-        line = f"  {class_name:<12} n={len(subset):<5}"
+        correct = rate(subset, lambda row: row["human"] == CORRECT)
+        line = f"  {class_name:<12} n={len(subset):<6} human-correct {100 * correct:5.1f}%"
         for tag in tags:
-            metrics = classification(subset, lambda row, tag=tag: row.get(f"bbox_agent_{tag}") == "valid")
-            line += f"  {tag}: {metrics['f1']:.1f}" if metrics else f"  {tag}: --"
+            scores = classification(subset, lambda row, tag=tag: row.get(f"bbox_agent_{tag}") == "valid")
+            line += f"   {tag}: {scores['f1']:5.1f}" if scores else f"   {tag}: --"
         print(line)
 
     if len(tags) == 2:
-        a, b = tags
-        contested = [row for row in rows if row[f"triage_{a}"] != row[f"triage_{b}"]]
-        print(f"\nCross-run adjudication on {len(contested)} masks the runs triage differently:")
-        for tag in tags:
-            agreed = sum(1 for row in contested
-                         if (row[f"triage_{tag}"] != "reject") == (row["human"] == CORRECT))
-            share = f"{100 * agreed / len(contested):.1f}%" if contested else "--"
-            print(f"  {tag} sides with the human on {agreed}/{len(contested)} ({share})")
+        report_cross_run(rows, tags, args)
 
     # Where a human "wrong" landed. The labeler judged the mask, not the run, so
     # both error directions are attributed here rather than asked about there.
     print("\nAttribution of the human's verdicts, per run:")
     incorrect = [row for row in rows if row["human"] == INCORRECT]
-    print(f"  {len(incorrect)} masks the human called incorrect")
+    print(f"  {len(incorrect):,} masks the human called incorrect")
     for tag in tags:
         retained = [row for row in incorrect if row[f"triage_{tag}"] != "reject"]
         by_class = Counter(row["class"] for row in retained)
         share = f"{100 * len(retained) / len(incorrect):.1f}%" if incorrect else "--"
-        print(f"    {tag}: kept {len(retained)} of them ({share}) {dict(by_class)}")
+        print(f"    {tag}: kept {len(retained):,} of them ({share}) {dict(by_class)}")
     for tag in tags:
         wrongly_rejected = [row for row in rows
                             if row[f"triage_{tag}"] == "reject" and row["human"] == CORRECT]
         by_class = Counter(row["class"] for row in wrongly_rejected)
-        print(f"    {tag}: rejected {len(wrongly_rejected)} masks the human kept ({dict(by_class)})")
+        print(f"    {tag}: rejected {len(wrongly_rejected):,} masks the human kept ({dict(by_class)})")
 
     if len(tags) == 2:
         a, b = tags
@@ -343,12 +605,111 @@ def report_triage(all_rows: list[dict], tags: list[str], args) -> None:
         both = [row for row in incorrect
                 if row[f"triage_{a}"] != "reject" and row[f"triage_{b}"] != "reject"]
         neither = len(incorrect) - len(both) - sum(len(value) for value in only.values())
-        print(f"  Of those: {len(both)} survived both runs, {neither} caught by both, "
-              + ", ".join(f"{len(value)} let through by {tag} alone" for tag, value in only.items()))
+        print(f"  Of those: {len(both):,} survived both runs, {neither:,} caught by both, "
+              + ", ".join(f"{len(value):,} let through by {tag} alone" for tag, value in only.items()))
+
+
+def report_cross_run(rows: list[dict], tags: list[str], args) -> None:
+    """Which run's triage is closer to the human — overall, and per class.
+
+    The overall gap is quoted as a paired interval because the runs decide on the
+    same masks. It is also split by class: a corpus whose composition is dominated
+    by one class can hand the win to whichever model happens to be good at that
+    class, and the split says whether the ordering is a competence ordering or a
+    mix artifact.
+    """
+    a, b = tags
+    contested = [row for row in rows if row[f"triage_{a}"] != row[f"triage_{b}"]]
+    print(f"\nCross-run adjudication on {len(contested):,} masks the runs triage differently:")
+    for tag in tags:
+        agreed = sum(1 for row in contested
+                     if (row[f"triage_{tag}"] != "reject") == (row["human"] == CORRECT))
+        share = f"{100 * agreed / len(contested):.1f}%" if contested else "--"
+        print(f"  {tag} sides with the human on {agreed:,}/{len(contested):,} ({share})")
+
+    retains = {tag: [row[f"triage_{tag}"] != "reject" for row in rows] for tag in tags}
+    delta = paired_delta_ci(rows, retains[a], retains[b], args.bootstrap, args.seed)
+    if delta:
+        print(f"  paired F1 difference {a} − {b}: [{delta[0]:+.1f}, {delta[1]:+.1f}] "
+              f"({'separable' if delta[0] * delta[1] > 0 else 'not separable — interval spans 0'})")
+
+    print("  the same difference, per class (a class-heavy corpus can invent the ordering):")
+    for class_name in sorted({row["class"] for row in rows}):
+        subset = [row for row in rows if row["class"] == class_name]
+        share_of_corpus = 100 * len(subset) / len(rows)
+        scores = {tag: classification(subset, lambda row, tag=tag: row[f"triage_{tag}"] != "reject")
+                  for tag in tags}
+        if not all(scores.values()):
+            print(f"    {class_name:<12} n={len(subset):<6} ({share_of_corpus:4.1f}% of masks)  not estimable")
+            continue
+        delta = paired_delta_ci(subset,
+                                [row[f"triage_{a}"] != "reject" for row in subset],
+                                [row[f"triage_{b}"] != "reject" for row in subset],
+                                args.bootstrap, args.seed)
+        band = f"  Δ [{delta[0]:+.1f}, {delta[1]:+.1f}]" if delta else ""
+        print(f"    {class_name:<12} n={len(subset):<6} ({share_of_corpus:4.1f}% of masks)  "
+              + "  ".join(f"{tag} F1 {scores[tag]['f1']:5.1f}" for tag in tags) + band)
 
 
 # --------------------------------------------------------------------------
-# Discovery job
+# SAM proposals — every triage variant, replayed
+# --------------------------------------------------------------------------
+
+
+def report_variants(sam_rows: list[dict], tags: list[str], args) -> None:
+    """Replay each rule in `replay_triage.VARIANTS` over the judged masks.
+
+    The rules come from the same module that writes the training annotations, so
+    a variant scored here is the variant that would be trained on. A rule that is
+    not separable here will not be separable downstream either.
+    """
+    header("TRIAGE VARIANTS vs HUMAN VERDICT   (positive = human called the mask correct)")
+    print("  A rule 'predicts correct' when it retains the mask. `bad kept` is the share of")
+    print("  human-rejected masks it retains — wrong pixels entering a training label; `good")
+    print("  lost` is the share of human-accepted masks it deletes. Rank on those, not F1:")
+    print("  F1 pools the two, so it favours keeping everything whenever the base rate is high.")
+
+    runs = {tag: load_run_masks(tag, {row["frame_id"] for row in sam_rows}) for tag in tags}
+    print("\n  join to stored pipeline state (needed to replay a rule):")
+    joined = {}
+    for tag in tags:
+        joined[tag] = sum(1 for row in sam_rows if (row["frame_id"], row["id"]) in runs[tag])
+        pct = 100 * joined[tag] / len(sam_rows) if sam_rows else 0
+        flag = "" if pct > 99 else "   <-- INCOMPLETE, scores below are on the joined subset"
+        print(f"    {tag:26} {joined[tag]:,}/{len(sam_rows):,} ({pct:.1f}%){flag}")
+    if sam_rows and max(joined.values()) == 0:
+        raise SystemExit("\nNo exported mask joined to stored results — check --tags and the export's frame ids.")
+
+    for tag in tags:
+        state = runs[tag]
+        pairs = [(row, state[(row["frame_id"], row["id"])]) for row in sam_rows
+                 if (row["frame_id"], row["id"]) in state]
+        if not pairs:
+            print(f"\n  {tag}: no joined masks")
+            continue
+        print(f"\n  {tag}  ({len(pairs):,} masks)")
+        for name, (rule, _description) in VARIANTS.items():
+            # One evaluation of the rule per mask, kept as a boolean vector: the
+            # verdict does not change between bootstrap resamples, so scoring and
+            # every resample below read this vector rather than re-running the rule.
+            scored, retains = [], []
+            for row, mask in pairs:
+                try:
+                    keeps = rule(mask, swin_q=args.swin_threshold) != TRIAGE_REJECT
+                except Exception:
+                    continue
+                scored.append(row)
+                retains.append(keeps)
+            if not scored:
+                print(f"  {name:<26} (rule could not be evaluated)")
+                continue
+            scores = metrics(retains, [row["human"] == CORRECT for row in scored])
+            ci = f1_ci(scored, retains, args.bootstrap, args.seed) if scores else None
+            show(name, scores, ci, "(needs joined state)" if name in NEEDS_FULL_STATE else "")
+
+
+# --------------------------------------------------------------------------
+# Discovery candidates
 # --------------------------------------------------------------------------
 
 
@@ -365,7 +726,9 @@ def report_discovery(all_rows: list[dict], tags: list[str], population: dict[str
     number would be mostly boundary growth wearing the label of recall.
     """
     rows = [row for row in all_rows if row["human"]]
-    print(f"\n{len(rows)} candidates over {len({row['frame_id'] for row in rows})} frames")
+    base = rate(rows, lambda row: row["human"] == CORRECT)
+    print(f"\n{len(rows):,} candidates over {len({row['frame_id'] for row in rows}):,} frames; "
+          f"{100 * base:.1f}% are real objects before any confirmation")
 
     kappa = cohen_kappa(all_rows)
     if kappa:
@@ -376,8 +739,7 @@ def report_discovery(all_rows: list[dict], tags: list[str], population: dict[str
     for stratum in sorted({row["stratum"] for row in rows}):
         subset = [row for row in rows if row["stratum"] == stratum]
         precision = rate(subset, lambda row: row["human"] == CORRECT)
-        ci = bootstrap_ci(subset, lambda sub: rate(sub, lambda row: row["human"] == CORRECT),
-                          args.iterations, args.seed)
+        ci = rate_ci(subset, lambda row: row["human"] == CORRECT, args.bootstrap, args.seed)
         size = population.get(stratum)
         entry = {"stratum": stratum, "n": len(subset), "precision": 100 * precision,
                  "ci": ci, "population": size,
@@ -385,7 +747,30 @@ def report_discovery(all_rows: list[dict], tags: list[str], population: dict[str
         table.append(entry)
         extra = f"  → ~{entry['real']:,.0f} real of {size:,}" if size else ""
         interval = f"  [{100 * ci[0]:.1f}, {100 * ci[1]:.1f}]" if ci else ""
-        print(f"  {stratum:<24} n={len(subset):<4} precision {100 * precision:5.1f}%{interval}{extra}")
+        print(f"  {stratum:<24} n={len(subset):<5} precision {100 * precision:5.1f}%{interval}{extra}")
+
+    # A confirmation flag read as a *classifier* of "is this a real object": the
+    # stratum table says how precise each pool is, this says whether confirming
+    # carries information at all.
+    print("\nEach run's confirmation, scored as a predictor of 'real object':")
+    for tag in tags:
+        field = f"confirmed_{tag}"
+        have = [row for row in rows if field in row]
+        if not have:
+            print(f"  {tag:<32} (no {field} column in the export)")
+            continue
+        confirms = [bool(row.get(field)) for row in have]
+        scores = metrics(confirms, [row["human"] == CORRECT for row in have])
+        # What confirmation buys: the precision of the confirmed pool against the
+        # precision of the pool before anyone confirmed anything. A lift near zero
+        # means the flag carries no information about whether the region is real.
+        lift = ""
+        if scores:
+            confirmed_rate = rate([row for row in have if row.get(field)],
+                                  lambda row: row["human"] == CORRECT)
+            lift = f"lift {100 * (confirmed_rate - base):+.1f}pp on this kind's {100 * base:.1f}% base rate"
+        show(f"confirmed by {tag}", scores,
+             f1_ci(have, confirms, args.bootstrap, args.seed) if scores else None, lift)
 
     # Each run's confirmed set is 'both' plus its own exclusive stratum, so the
     # per-stratum precisions compose into the number the paper actually needs:
@@ -447,29 +832,33 @@ def write_latex(table: list[dict], path: Path, kind: str) -> None:
 # --------------------------------------------------------------------------
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--export", type=Path, required=True, help="job export CSV from label-front")
-    parser.add_argument("--manifest", type=Path,
-                        help="job manifest JSON from label-front — bundle-wide totals, for extrapolation")
-    parser.add_argument("--only", choices=["sam", "discovery"], help="report one source only")
-    parser.add_argument("--iterations", type=int, default=10000, help="bootstrap resamples")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--latex-out", type=Path, help="write the discovery paper table here")
-    parser.add_argument("--latex-kind", choices=["standalone", "fringe"], default="standalone",
-                        help="which kind of candidate the paper table reports (default: standalone)")
-    args = parser.parse_args()
+class Tee:
+    """Write the report to the terminal and to a file in one pass."""
 
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text: str) -> int:
+        for stream in self.streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
+
+
+def report(args) -> None:
     manifest = json.loads(args.manifest.read_text()) if args.manifest else None
     rows, stats = load_masks(args.export)
-    tags = run_tags(rows)
+    tags = args.tags or run_tags(rows)
 
     if manifest:
         job = manifest["job"]
         print(f"Job: {job['name']}   K={job['redundancy']}   "
               f"{manifest['progress']['completed']}/{manifest['progress']['tasks']} frames complete")
-    print(f"Runs: {', '.join(tags) or '(none named in the export)'}")
-    print(f"Scored {stats['scored']} masks ({stats['tied']} tied, {stats['pending']} not yet answered)")
+    print(f"Export: {args.export}")
+    report_coverage(args.export, rows, stats, tags)
 
     # One job, two questions: `source` says which masks answer which, so the
     # split happens here rather than in the labeling.
@@ -477,11 +866,12 @@ def main() -> None:
     for row in rows:
         by_source[row.get("source", "sam")].append(row)
 
-    if args.only is None or args.only == "sam":
-        if by_source["sam"]:
-            print("\n" + "=" * 70 + "\nSAM proposals — triage accuracy\n" + "=" * 70)
-            report_triage(by_source["sam"], tags, args)
-    if args.only is None or args.only == "discovery":
+    if args.only in (None, "sam") and by_source["sam"]:
+        header("SAM PROPOSALS — triage accuracy of the agents as shipped")
+        report_triage(by_source["sam"], tags, args)
+    if args.only in (None, "variants") and by_source["sam"]:
+        report_variants([row for row in by_source["sam"] if row["human"]], tags, args)
+    if args.only in (None, "discovery"):
         # Reported one kind at a time: a standalone find and a boundary fringe
         # are different claims and do not average into anything meaningful.
         by_kind = defaultdict(list)
@@ -499,11 +889,48 @@ def main() -> None:
             else "the manifest carries no stratum totals"
         )
         for kind, rows_of_kind in sorted(by_kind.items()):
-            print("\n" + "=" * 70 + f"\nDiscovery candidates ({kind}) — precision per stratum\n" + "=" * 70)
+            header(f"DISCOVERY CANDIDATES ({kind}) — precision per stratum")
             table = report_discovery(rows_of_kind, tags, population, reason, args)
             if args.latex_out and kind == args.latex_kind:
                 write_latex(table, args.latex_out, kind)
 
+    header("READING THIS REPORT")
+    print("  Every rule above is scored on the same masks, so differences are paired.")
+    print("  Rank triage variants on `bad kept` (wrong pixels entering the label) against")
+    print("  `good lost` (objects omitted) — F1 pools the two and rewards keeping everything.")
+    print("  A variant not separable here will not be separable in a downstream mIoU run either.")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--export", type=Path, required=True, help="job export CSV from label-front")
+    parser.add_argument("--manifest", type=Path,
+                        help="job manifest JSON from label-front — bundle-wide totals, for extrapolation")
+    parser.add_argument("--tags", nargs="+",
+                        help="runs to score (default: every run named in the export)")
+    parser.add_argument("--only", choices=["sam", "variants", "discovery"], help="report one section only")
+    parser.add_argument("--bootstrap", type=int, default=10000,
+                        help="frame-clustered resamples for each 95%% CI (0 = skip)")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--swin-threshold", type=float, default=config.SWIN_AGREEMENT_THRESHOLD)
+    parser.add_argument("--hpc", action="store_true", help="read results from the HPC data root")
+    parser.add_argument("--out", type=Path,
+                        help="write the report here (default: <export>.report.txt)")
+    parser.add_argument("--latex-out", type=Path, help="write the discovery paper table here")
+    parser.add_argument("--latex-kind", choices=["standalone", "fringe"], default="standalone",
+                        help="which kind of candidate the paper table reports (default: standalone)")
+    args = parser.parse_args()
+
+    if args.hpc:
+        config.use_hpc()
+
+    out = args.out or args.export.with_suffix(".report.txt")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w") as handle, redirect_stdout(Tee(sys.stdout, handle)):
+        report(args)
+        print(f"\nReport written to {out}")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

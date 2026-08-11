@@ -1,0 +1,31 @@
+% INTERIM — regenerate from the verification export when the job completes.
+% Produced by ranking every judged SAM proposal by each signal and reading off
+% the cumulative share of human-rejected masks contained in the top X%.
+\begin{table}[t]
+\centering
+\caption{Where a limited verification budget should go. Each cell is the share of the
+         human-rejected masks a labeller would reach by inspecting only the top $X\,\%$ of
+         regions under that ranking. The free signals are the ones already computed for every
+         mask at negligible cost; the VLM rows cost a crop verification call each.
+         The lower block spends the same budget on whole frames rather than masks, which is
+         the cheaper interface but a much weaker filter: errors are spread across frames, with
+         \prov{77\,\%} of frames holding at least one rejected mask. \provnote}
+\label{tab:review_targeting}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Ranking signal} & \textbf{10\,\%} & \textbf{20\,\%} & \textbf{30\,\%} \\
+\midrule
+\multicolumn{4}{l}{\textit{Budget spent on individual masks}} \\
+Random order                    & \prov{10.6} & \prov{19.3} & \prov{29.9} \\
+Swin agreement (free)           & \prov{19.8} & \prov{44.6} & \prov{68.7} \\
+Swin + LiDAR support (free)     & \prov{20.1} & \prov{43.4} & \prov{68.4} \\
+LLaVA-1.6-34B BBox verdict      & \prov{13.1} & \prov{28.7} & \prov{45.9} \\
+Qwen2.5-VL-72B BBox verdict     & \prov{18.5} & \prov{40.4} & \prov{56.0} \\
+Free signals $+$ Qwen           & \prov{32.7} & \prov{52.9} & \prov{69.6} \\
+\addlinespace
+\multicolumn{4}{l}{\textit{Budget spent on whole frames}} \\
+Random frames                   & \prov{5.7}  & \prov{15.9} & \prov{27.8} \\
+Best frame ranking (free $+$ Qwen) & \prov{11.7} & \prov{24.8} & \prov{37.6} \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,31 +1,33 @@
-% Generated placeholder — fill from analyze_human_verification.py once the
-% visin `verify` job export is available. Region counts below are the sizes of
-% the labelling job actually built (make_label_bundle.py, 2026-08-10) and are
-% final; only the human columns are outstanding.
+% Region counts are the sizes of the labelling job actually built
+% (make_label_bundle.py, 2026-08-10) and are final. The human columns are
+% INTERIM — regenerate with analyze_human_verification.py on the latest export
+% and drop the \prov marking once the job is complete.
 \begin{table*}[t]
 \centering
 \caption{Manual verification of the flagged partition. A single \texttt{mask\_toggle} job over
          all 4{,}110 frames, in which every SAM proposal and every Swin discovery candidate is
-         shown together and the labeller clicks whatever is wrong. The labeller is never told
-         which model produced what: both runs scored the same deterministic SAM proposals, so a
+         shown together and the labeller marks the errors. The labeller is never told
+         which model produced which region: both runs scored the same deterministic SAM proposals, so a
          verdict on a mask is run-independent and attribution is done afterwards from the
          per-mask record of each run's decision. \emph{Incorrect} is the share a human rejected.
          Discovery candidates are split by \emph{kind}: \emph{standalone} candidates are regions
-         SAM missed entirely, where precision is what discovery recovers; \emph{fringe}
-         candidates are the rim left around an object SAM already covered, where precision is
-         boundary completion. The two are not pooled, because a pooled number reads as recall
-         gain while being mostly the latter.}
+         SAM missed entirely, where precision measures what discovery recovers; \emph{fringe}
+         candidates are the rim left around an object SAM already covered, where precision measures
+         boundary completion. The two are reported separately, since a pooled number is dominated by
+         fringes and would read as a recall gain.
+         \emph{Regions} is the job as built and is final; \emph{judged} is what has been labelled so
+         far. \provnote}
 \label{tab:manual_verification}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{llrrr}
+\begin{tabular}{llrrrr}
 \toprule
-\textbf{Source} & \textbf{Kind} & \textbf{Regions} & \textbf{Incorrect} & \textbf{Incorrect \%} \\
+\textbf{Source} & \textbf{Kind} & \textbf{Regions} & \textbf{Judged} & \textbf{Incorrect} & \textbf{Incorrect \%} \\
 \midrule
-SAM proposals            & ---        & 90{,}176 & --- & --- \\
-Discovery candidates     & standalone & 16{,}402 & --- & --- \\
-Discovery candidates     & fringe     & 38{,}850 & --- & --- \\
+SAM proposals            & ---        & 90{,}176  & \prov{10{,}141} & \prov{1{,}340} & \prov{13.2} \\
+Discovery candidates     & standalone & 16{,}402  & \prov{1{,}814}  & \prov{724}     & \prov{39.9} \\
+Discovery candidates     & fringe     & 38{,}850  & \prov{4{,}435}  & \prov{1{,}938} & \prov{43.7} \\
 \midrule
-\textbf{Total}           &            & \textbf{145{,}428} & --- & --- \\
+\textbf{Total}           &            & \textbf{145{,}428} & \prov{\textbf{16{,}390}} & \prov{\textbf{4{,}002}} & \prov{\textbf{24.4}} \\
 \bottomrule
 \end{tabular}}
 \end{table*}
@@ -34,34 +36,40 @@ Discovery candidates     & fringe     & 38{,}850 & --- & --- \\
 
 \begin{table*}[t]
 \centering
-\caption{Agreement of each automated decision with the human verdict, on the same 4{,}110 frames.
+\caption{Agreement of each automated decision with the human verdict, on the frames verified so far.
          Every mask carries both runs' decisions, so one human pass scores all three sources.
-         For triage, a \emph{false accept} is a mask the pipeline kept that the human rejected —
-         the error that puts wrong pixels into a training label — and a \emph{false reject} is a
+         For triage, a \emph{false accept} is a mask the pipeline kept that the human rejected,
+         the error that puts wrong pixels into a training label, and a \emph{false reject} is a
          mask it deleted that the human kept, which destroys real pixels. The two costs are not
-         symmetric and are therefore reported apart rather than as a single accuracy.
+         symmetric and are therefore reported separately rather than as a single accuracy: F1 pools
+         them, and with only \prov{13.2\,\%} of proposals actually wrong it rewards the rule that
+         keeps everything, which is why the F1 column ranks these rules in the opposite order to the
+         downstream mIoU of Table~\ref{tab:ablation}.
          Swin-only is included because it is the strongest annotation variant and uses no VLM at
-         all; if it matches human judgement as closely as the VLM does, the VLM stage is not
-         earning its cost.}
+         all; if it matches human judgement as closely as the VLM does, the VLM stage does not
+         justify its cost.
+         Confidence intervals resample frames, not masks, since masks in one frame share a scene and
+         a labeller's calibration. \provnote}
 \label{tab:human_agreement}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrr}
 \toprule
 \textbf{Decision source} & \textbf{Masks judged} & \textbf{False accept \%} & \textbf{False reject \%}
-  & \textbf{Precision} & \textbf{Recall} & \textbf{F1} \\
+  & \textbf{Precision} & \textbf{Recall} & \textbf{F1 [95\,\% CI]} \\
 \midrule
-\multicolumn{7}{l}{\textit{Mask triage — keep or delete a SAM proposal}} \\
-Swin only (no VLM)            & --- & --- & --- & --- & --- & --- \\
-LLaVA-1.6-34B triage          & --- & --- & --- & --- & --- & --- \\
-Qwen2.5-VL-72B triage         & --- & --- & --- & --- & --- & --- \\
+\multicolumn{7}{l}{\textit{Mask triage: keep or delete a SAM proposal}} \\
+Keep every proposal (no triage) & \prov{10{,}141} & \prov{100.0} & \prov{0.0}  & \prov{86.8} & \prov{100.0} & \prov{92.9 [92.2, 93.6]} \\
+Swin only (no VLM)              & \prov{10{,}141} & \prov{21.0}  & \prov{30.2} & \prov{95.6} & \prov{69.8}  & \prov{80.7 [79.7, 81.7]} \\
+LLaVA-1.6-34B triage            & \prov{10{,}141} & \prov{56.1}  & \prov{16.3} & \prov{90.7} & \prov{83.7}  & \prov{87.1 [86.3, 87.8]} \\
+Qwen2.5-VL-72B triage           & \prov{10{,}141} & \prov{53.1}  & \prov{12.7} & \prov{91.5} & \prov{87.3}  & \prov{89.3 [88.7, 90.0]} \\
 \addlinespace
-\multicolumn{7}{l}{\textit{Discovery confirmation — standalone candidates only}} \\
-LLaVA-1.6-34B                 & --- & --- & --- & --- & --- & --- \\
-Qwen2.5-VL-72B                & --- & --- & --- & --- & --- & --- \\
+\multicolumn{7}{l}{\textit{Discovery confirmation: standalone candidates only}} \\
+LLaVA-1.6-34B                 & \prov{1{,}814} & \prov{63.3} & \prov{29.4} & \prov{62.7} & \prov{70.6} & \prov{66.4 [63.5, 69.1]} \\
+Qwen2.5-VL-72B                & \prov{1{,}814} & \prov{65.1} & \prov{18.4} & \prov{65.4} & \prov{81.6} & \prov{72.6 [69.8, 75.1]} \\
 \addlinespace
-\multicolumn{7}{l}{\textit{Discovery confirmation — fringe candidates}} \\
-LLaVA-1.6-34B                 & --- & --- & --- & --- & --- & --- \\
-Qwen2.5-VL-72B                & --- & --- & --- & --- & --- & --- \\
+\multicolumn{7}{l}{\textit{Discovery confirmation: fringe candidates}} \\
+LLaVA-1.6-34B                 & \prov{4{,}435} & \prov{87.8} & \prov{13.4} & \prov{56.0} & \prov{86.6} & \prov{68.0 [65.9, 70.1]} \\
+Qwen2.5-VL-72B                & \prov{4{,}435} & \prov{86.6} & \prov{14.9} & \prov{55.9} & \prov{85.1} & \prov{67.5 [65.4, 69.5]} \\
 \bottomrule
 \end{tabular}}
 \end{table*}

@@ -11,4 +11,4 @@ paper/*.blg
 paper/*.fls
 paper/*.fdb_latexmk
 qualitative_candidates/
-
+human_verified_output
