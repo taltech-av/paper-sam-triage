@@ -1,12 +1,27 @@
 #!/usr/bin/env python3
 """
 Create stratified train / val / test splits balanced by weather condition
-and rare-class pixel presence (cyclist + pedestrian).
+and class content.
 
 Reads a frame-list CSV (one 'camera/frame_XXXXXX.png' path per line), looks up
 ZOD metadata for weather, counts class pixels from an annotation directory, then
-allocates frames so that every split mirrors the overall weather × rare-class
-distribution as closely as possible.
+allocates frames so that every split mirrors the overall distribution.
+
+Two allocators, chosen with --balance:
+
+  weather  (default, unchanged)  strata are weather × rare-class-presence and
+           frames are dealt out at random inside each stratum. Rare-class
+           *presence* is a coarse proxy for content: two frames both "have a
+           pedestrian" whether that is 60 px or 60,000 px, so a split can match
+           on presence and still hold a third of a class's pixels.
+
+  pixels   weather is held exactly (allocation runs inside each condition) and
+           frames are then dealt out to equalise, per class, the *pixel mass*
+           each split receives as well as the frame count. Use this whenever
+           the split is small enough that one big instance moves a class's
+           share — an 800-frame set has ~25 snow frames, and which side of the
+           split the one large snow-scene bus lands on is otherwise luck.
+           IoU is a pixel-level metric, so the pixels are what has to be even.
 
 Usage:
     # Good frames (manually inspected clean partition)
@@ -16,6 +31,12 @@ Usage:
     # Flagged frames (VLM-annotated partition)
     python make_splits.py --frames frames/bad_frames.csv \\
         --out-dir /run/media/tom/ml/zod_temp/splits_flagged
+
+    # Small set — balance the class pixel mass, not just presence
+    python make_splits.py --frames /mnt/ml/zod_temp/vlm/human_verified/frames.csv \\
+        --out-dir /mnt/ml/zod_temp/vlm/human_verified/splits \\
+        --annotation-dir /mnt/ml/zod_temp/vlm/human_verified/annotation \\
+        --balance pixels --val-ratio 0.15 --test-ratio 0.20
 
     # Custom ratios / annotation dir / seed
     python make_splits.py --frames frames/good_frames.csv \\
@@ -213,6 +234,148 @@ def make_splits(
     return train, val, test
 
 
+# ── Class-pixel-balanced splitting ────────────────────────────────────────────
+
+
+def _class_mass(records: list[dict]) -> dict[int, int]:
+    return {cls: sum(r["pixel_counts"].get(cls, 0) for r in records) for cls in OBJECT_CLASSES}
+
+
+def _apportion(total: int, ratios: list[float]) -> list[int]:
+    """Largest-remainder apportionment — integer counts summing exactly to total."""
+    exact = [total * r for r in ratios]
+    counts = [int(x) for x in exact]
+    for index in sorted(range(len(ratios)), key=lambda i: -(exact[i] - counts[i]))[:total - sum(counts)]:
+        counts[index] += 1
+    return counts
+
+
+# A local-search pass is ~1 ms per condition; the cap only exists so a pathological
+# corpus cannot spin. Convergence is normally reached in far fewer moves than this.
+MAX_SWAPS = 2000
+
+
+def _allocate_condition(records: list[dict], ratios: dict[str, float],
+                        rng: random.Random) -> dict[str, list[dict]]:
+    """Deal one weather condition's frames out, matching class pixel mass.
+
+    Frame counts are fixed up front by largest-remainder apportionment, so the
+    only free choice is *which* frames each split gets. That choice is made by
+    local search on the imbalance itself:
+
+        J = Σ_split Σ_class (split's share of that class's pixels − its ratio)²
+
+    starting from a proportional deal and repeatedly applying the single
+    best-improving swap of two frames between two splits until no swap helps.
+
+    Optimising J directly is the point. Both greedy alternatives tried here
+    failed, in opposite directions, for the same reason — a one-pass placement
+    rule cannot see what it will be handed later, so the frame *order* decides
+    the outcome:
+
+      · class-at-a-time (iterative stratification) placed pedestrian frames by
+        pedestrian deficit alone, which committed most of the cyclist mass
+        before cyclist was ever scored: 46% of the cyclist pixels in a 65% train
+        split. Cyclists ride next to pedestrians; the classes are not separable.
+      · joint scoring, biggest-frame-first, sent every heavy frame to whichever
+        split had the steepest gradient while all three were still empty, then
+        filled the rest with crumbs — 73% of the pixels in that same 65% split.
+
+    A swap changes J by an amount that depends only on the two frames and the
+    two splits' current errors, so the best move over all pairs is one
+    vectorised expression and the search converges in a few dozen moves.
+
+    Shares, not pixels, are what is squared: each class is divided by its own
+    total, so a 720k-pixel pedestrian corpus gets exactly the same say as a 19M
+    -pixel vehicle one. Do not additionally divide by the split's ratio to
+    "weight small splits more" — that was tried too, and it makes val's gradient
+    44x train's, which is how the second failure above got its heavy frames.
+    """
+    names = list(ratios)
+    total = len(records)
+    quota = _apportion(total, [ratios[s] for s in names])
+
+    mass = _class_mass(records)
+    live = [c for c in OBJECT_CLASSES if mass[c] > 0]
+    pixels = np.array([[rec["pixel_counts"].get(c, 0) / mass[c] for c in live]
+                       for rec in records], dtype=float).reshape(total, len(live))
+
+    # Start from a proportional deal of the influence-ordered frames — the
+    # heaviest frame of the rarest class first, spread across the splits — so
+    # the search begins near a solution rather than at a random one.
+    influence = pixels.max(axis=1) if live else np.zeros(total)
+    order = sorted(range(total), key=lambda i: (-influence[i], records[i]["frame_id"]))
+    labels = np.empty(total, dtype=int)
+    filled = [0] * len(names)
+    for index in order:
+        k = min(range(len(names)),
+                key=lambda k: ((filled[k] + 0.5) / quota[k] if quota[k] else math.inf, k))
+        labels[index] = k
+        filled[k] += 1
+
+    target = np.array([ratios[s] for s in names])
+    share = np.array([pixels[labels == k].sum(axis=0) for k in range(len(names))])
+    for _ in range(MAX_SWAPS):
+        error = share - target[:, None]
+        best_delta, best_move = -1e-12, None
+        for a in range(len(names)):
+            for b in range(a + 1, len(names)):
+                rows, cols = np.flatnonzero(labels == a), np.flatnonzero(labels == b)
+                if not len(rows) or not len(cols):
+                    continue
+                # Swapping i∈a with j∈b moves d = P[j] − P[i] from b into a:
+                #   ΔJ = 2 · Σ_c d_c · (error[a,c] − error[b,c] + d_c)
+                diff = pixels[cols][None, :, :] - pixels[rows][:, None, :]
+                delta = 2 * ((diff * (error[a] - error[b])).sum(-1) + (diff * diff).sum(-1))
+                flat = int(np.argmin(delta))
+                i, j = divmod(flat, len(cols))
+                if delta[i, j] < best_delta:
+                    best_delta, best_move = delta[i, j], (a, b, rows[i], cols[j])
+        if best_move is None:
+            break
+        a, b, i, j = best_move
+        labels[i], labels[j] = b, a
+        share[a] += pixels[j] - pixels[i]
+        share[b] += pixels[i] - pixels[j]
+
+    assigned = {s: [records[i] for i in np.flatnonzero(labels == k)] for k, s in enumerate(names)}
+    for split in assigned.values():
+        rng.shuffle(split)
+    return assigned
+
+
+def pixel_balanced_splits(
+    records: list[dict],
+    val_ratio: float,
+    test_ratio: float,
+    seed: int,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Splits that match on weather, frame count *and* per-class pixel mass.
+
+    Weather is exact rather than balanced: each condition is allocated on its
+    own, so a split's weather profile is the corpus profile by construction and
+    only the class content is left to the greedy rule.
+    """
+    ratios = {"train": 1.0 - val_ratio - test_ratio, "val": val_ratio, "test": test_ratio}
+    if min(ratios.values()) <= 0:
+        raise ValueError(f"ratios must all be > 0, got {ratios}")
+
+    rng = random.Random(seed)
+    by_weather: dict[str, list[dict]] = defaultdict(list)
+    for rec in records:
+        by_weather[rec["weather"]].append(rec)
+
+    out: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    for weather in sorted(by_weather):
+        group = sorted(by_weather[weather], key=lambda r: r["frame_id"])
+        for name, part in _allocate_condition(group, ratios, rng).items():
+            out[name] += part
+
+    for split in out.values():
+        rng.shuffle(split)
+    return out["train"], out["val"], out["test"]
+
+
 # ── Reporting ─────────────────────────────────────────────────────────────────
 
 def _pct(n: int, total: int) -> str:
@@ -246,10 +409,35 @@ def distribution_table(records: list[dict], label: str) -> str:
     return "\n".join(lines)
 
 
+def balance_table(records: list[dict], splits: list[tuple[str, list[dict]]]) -> str:
+    """Each split's share of the corpus, per class, in pixels and in frames.
+
+    The column to read is the gap between a class's pixel share and the split's
+    frame share: equal means the split holds its proportional slice of that
+    class, and a class sitting several points off is one whose downstream IoU is
+    measured on a differently-sized sample than it was trained on.
+    """
+    total_frames = len(records)
+    mass = _class_mass(records)
+    lines = ["", "  Per-class pixel share vs frame share (a split is even when they match):",
+             f"    {'split':8} {'frames':>8} {'frames %':>9}"
+             + "".join(f"{CLASS_NAMES[c] + ' %':>13}" for c in OBJECT_CLASSES)]
+    for name, split in splits:
+        shares = "".join(
+            f"{100 * sum(r['pixel_counts'].get(c, 0) for r in split) / mass[c]:12.1f}%"
+            if mass[c] else f"{'—':>13}"
+            for c in OBJECT_CLASSES)
+        lines.append(f"    {name:8} {len(split):8d} {_pct(len(split), total_frames):>9}{shares}")
+    lines.append(f"    {'TOTAL':8} {total_frames:8d} {'100.0%':>9}"
+                 + "".join(f"{m:12,d}p" for m in (mass[c] for c in OBJECT_CLASSES)))
+    return "\n".join(lines)
+
+
 def write_report(records: list[dict], train: list[dict], val: list[dict], test: list[dict],
                  out_path: Path) -> None:
     sep = "=" * 72
     lines = [sep, "SPLIT DISTRIBUTION REPORT", sep]
+    lines.append(balance_table(records, [("train", train), ("val", val), ("test", test)]))
     lines.append(distribution_table(records, "ALL FRAMES"))
     lines.append(distribution_table(train,   "TRAIN"))
     lines.append(distribution_table(val,     "VAL"))
@@ -298,6 +486,11 @@ def main() -> None:
                         help=f"Annotation PNG directory for pixel counting (default: {DEFAULT_ANN_DIR})")
     parser.add_argument("--val-ratio",  type=float, default=0.15, help="Val fraction (default: 0.15)")
     parser.add_argument("--test-ratio", type=float, default=0.15, help="Test fraction (default: 0.15)")
+    parser.add_argument("--balance", choices=["weather", "pixels"], default="weather",
+                        help="weather: strata are weather × rare-class presence, random inside "
+                             "(default, reproduces the existing splits). pixels: weather held "
+                             "exactly, frames dealt to equalise per-class pixel mass — use on "
+                             "small sets, where presence alone leaves classes lopsided.")
     parser.add_argument("--min-test-per-weather", type=int, default=40,
                         help="Minimum test frames per weather category (default: 40). "
                              "Raises the effective test ratio for small conditions so "
@@ -319,7 +512,9 @@ def main() -> None:
     print(f"Output    : {out_dir}")
     print(f"Split     : train={1-args.val_ratio-args.test_ratio:.0%}  "
           f"val={args.val_ratio:.0%}  test={args.test_ratio:.0%}  "
-          f"min_test_per_weather={args.min_test_per_weather}  seed={args.seed}")
+          f"balance={args.balance}  "
+          f"min_test_per_weather={args.min_test_per_weather if args.balance == 'weather' else 'n/a'}  "
+          f"seed={args.seed}")
 
     # Analyze frames (or load cache)
     cache_path = out_dir / "frame_analysis.json"
@@ -345,8 +540,11 @@ def main() -> None:
         print(f"  WARNING: {missing_meta} frames missing ZOD metadata — assigned 'day_fair'")
 
     # Create stratified splits
-    train, val, test = make_splits(records, args.val_ratio, args.test_ratio, args.seed,
-                                   min_test_per_weather=args.min_test_per_weather)
+    if args.balance == "pixels":
+        train, val, test = pixel_balanced_splits(records, args.val_ratio, args.test_ratio, args.seed)
+    else:
+        train, val, test = make_splits(records, args.val_ratio, args.test_ratio, args.seed,
+                                       min_test_per_weather=args.min_test_per_weather)
     print(f"\nSplit sizes:  train={len(train)}  val={len(val)}  test={len(test)}")
 
     # Write split files

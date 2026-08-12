@@ -13,8 +13,25 @@ Everything the set consists of lands in one folder under the dataset root:
     vlm/human_verified/
         annotation/       class-id PNGs — the training input
         visualization/    camera + the kept masks, translucent, one per frame
-        frames.csv        the frames written, for make_splits.py
+        frames.csv        the frames written
+        splits/           train / validation / test lists over exactly those frames
         report.txt        this run's counts
+
+`splits/` is written by the same run, from the frames it just wrote, so the set
+and its partition can never drift apart. Labelling is ongoing: every export is
+larger than the last, so re-running this script re-cuts the splits over the new
+frame count and every arm of the comparison picks the change up from one place.
+The partition is *not* stable across runs — a frame in train today can be in
+test at the next export — so a checkpoint is only comparable to others trained
+against the same splits/ generation. Retrain the whole group after regenerating,
+never one arm of it.
+
+Frames are dealt out with `make_splits.pixel_balanced_splits`: weather is held
+exactly and the per-class *pixel* mass is equalised across splits, because at
+this size class content is what a random split gets wrong — cyclist is ~1% of
+the pixels and lives in a few dozen frames, so presence-only stratification
+leaves one split holding a third of the class. Pixel counts come from the clean
+annotations written by this run, which is the reference every arm is scored on.
 
 `annotation/` is what fusion-training reads. Its loader resolves an annotation by
 string-replacing `camera` in the image path with the config's `annotation_path`
@@ -63,6 +80,7 @@ Usage:
     python make_clean_annotations.py --export human_verified_output/job-<id>.csv
     python make_clean_annotations.py --export ... --discovery standalone
     python make_clean_annotations.py --export ... --no-vis        # PNGs only
+    python make_clean_annotations.py --export ... --no-splits     # leave splits/ alone
 """
 
 import argparse
@@ -81,6 +99,8 @@ from tqdm import tqdm
 import config
 from analyze_human_verification import CORRECT, Tee, load_masks, run_tags
 from core.mask_extractor import extract_proposals
+from make_splits import (WEATHER_CATEGORIES, analyze_frames, balance_table,
+                         pixel_balanced_splits, write_report, write_split)
 
 # Swin proposes three classes; two map straight onto a pipeline class, the third
 # is the split only a VLM confirmation resolves (see module docstring).
@@ -391,6 +411,49 @@ def report_classes(totals: dict[tuple[str, str], int], pixels: dict[tuple[str, s
           f"{100 * removed / (kept + removed):>9.1f}% {added:>8,}")
 
 
+def write_splits(written: list[str], annotation_dir: Path, splits_dir: Path,
+                 val_ratio: float, test_ratio: float, seed: int) -> None:
+    """Cut the frames just written into train / validation / test.
+
+    The per-weather `test_*.txt` files matter as much as `test.txt`: both
+    `test_swin.py` and `dump_frame_metrics.py` enumerate the five weather names
+    and evaluate each in turn, so a condition without a file is silently dropped
+    from the score. At this set's size some of them are only a handful of frames
+    — small enough that the weather-averaged mIoU those scripts print is noisy,
+    which is why the comparison is meant to be read off the pooled per-frame
+    dump (`dump_frame_metrics.py` → `bootstrap_miou.py`), where every test frame
+    carries equal weight and the arms are paired on identical frames.
+    """
+    splits_dir.mkdir(parents=True, exist_ok=True)
+    # make_splits works in bare ids ('011134'); this script carries the PNG stem
+    # ('frame_011134'), and the two meet again in write_split's 'camera/frame_*'.
+    frame_ids = [frame_id.removeprefix("frame_") for frame_id in written]
+    # Pixel counts come from the clean annotations, not annotation_sam: the
+    # split is balanced on the labels it will actually be trained and scored on.
+    records = analyze_frames(frame_ids, annotation_dir)
+    train, val, test = pixel_balanced_splits(records, val_ratio, test_ratio, seed)
+
+    print(f"\nSplits → {splits_dir}   "
+          f"(weather held exactly, per-class pixel mass equalised, seed {seed})")
+    write_split(train, splits_dir / "train.txt")
+    write_split(val,   splits_dir / "validation.txt")
+    write_split(test,  splits_dir / "test.txt")
+    for weather in WEATHER_CATEGORIES:
+        subset = [r for r in test if r["weather"] == weather]
+        if subset:
+            write_split(subset, splits_dir / f"test_{weather}.txt")
+    write_split(records, splits_dir / "all.txt")
+    (splits_dir / "frame_analysis.json").write_text(json.dumps(records, indent=2))
+    write_report(records, train, val, test, splits_dir / "report.txt")
+    print(balance_table(records, [("train", train), ("val", val), ("test", test)]))
+
+    thin = [w for w in WEATHER_CATEGORIES
+            if 0 < sum(1 for r in test if r["weather"] == w) < 8]
+    if thin:
+        print(f"\n  NOTE: {', '.join(thin)} have fewer than 8 test frames — read the "
+              "comparison off the pooled bootstrap, not the weather-averaged mIoU.")
+
+
 def report_training(out_root: Path, annotation_dir: Path, ids: Counter, frames: int) -> None:
     """What a CLFT config has to say to consume this, and the check that it can.
 
@@ -402,10 +465,12 @@ def report_training(out_root: Path, annotation_dir: Path, ids: Counter, frames: 
         relative = annotation_dir.relative_to(config.DATA_ROOT)
     except ValueError:
         relative = annotation_dir
-    print("\nFor a fusion-training config (config/vlm/clftv2-base/human/...):")
+    print("\nFor a fusion-training config (config/vlm/clftv2-base/cleaning/...):")
     print(f'  "dataset_root":    "{config.DATA_ROOT}"')
-    print(f'  "annotation_path": "{relative}"')
-    print(f'  "train_split":     "<splits dir>/train.txt"   (make_splits.py --frames {out_root / "frames.csv"})')
+    print(f'  "annotation_path": "{relative}"    (only the human arm; the automated arms')
+    print( '                                      point at their own annotation dir)')
+    print(f'  "train_split":     "{out_root / "splits" / "train.txt"}"')
+    print(f'  "val_split":       "{out_root / "splits" / "validation.txt"}"')
     named = ", ".join(f"{class_id}={config.CLASS_ID_TO_NAME.get(class_id, '?')}: {count:,} px"
                       for class_id, count in sorted(ids.items()))
     print(f"\n  {frames:,} PNGs, dataset class ids present — {named}")
@@ -431,6 +496,13 @@ def main() -> int:
                         help="one folder for the whole set "
                              "(default: <DATA_ROOT>/vlm/human_verified[_<kind>])")
     parser.add_argument("--no-vis", action="store_true", help="write the annotation PNGs only")
+    parser.add_argument("--no-splits", action="store_true",
+                        help="do not re-cut <out-root>/splits/ (leaves an existing partition, "
+                             "and the checkpoints trained against it, valid)")
+    parser.add_argument("--val-ratio", type=float, default=0.15, help="validation fraction (default: 0.15)")
+    parser.add_argument("--test-ratio", type=float, default=0.20,
+                        help="test fraction (default: 0.20) — the held-out frames the "
+                             "human-vs-automated mIoU contrast is read off")
     parser.add_argument("--class-sheets", action="store_true",
                         help="also write per-class contact sheets of kept/removed/added instances")
     parser.add_argument("--per-class", type=int, default=48, help="tiles per contact sheet")
@@ -529,6 +601,10 @@ def run(args, kinds: set[str], out_root: Path) -> None:
     frames_csv = out_root / "frames.csv"
     frames_csv.write_text("".join(f"camera/{frame_id}.png\n" for frame_id in written))
     print(f"\nFrame list → {frames_csv}  ({len(written):,} frames)")
+
+    if not args.no_splits:
+        write_splits(written, annotation_dir, out_root / "splits",
+                     args.val_ratio, args.test_ratio, args.seed)
 
     report_training(out_root, annotation_dir, ids, len(written))
 
