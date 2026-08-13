@@ -1,10 +1,28 @@
+% Filled from the same ladder checkpoints as tables/ablation.tex — the per-weather
+% test subsets of splits_vlm_4110_humantest, scored against the human labels.
+% Frame counts are the realised test split and are final.
 \begin{table}[t]
 \centering
-\caption{Per-weather mIoU and fw-IoU on CLFTv2-Base CrossFusion.}
+\caption{Per-weather mIoU for the ladder, on CLFTv2-Base CrossFusion. The test split is the 1{,}001
+         human-verified frames, whose weather composition is that of the flagged partition rather than
+         a balanced design, so the strata differ in size by more than an order of magnitude. Read the
+         overall comparison off the pooled paired bootstrap in Table~\ref{tab:ablation}: a mean over
+         these five columns would weight the 29-frame snow stratum like the 661-frame day-fair one.
+         \pendingnote}
 \label{tab:weather_miou}
-\begin{tabular}{l}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccccc}
 \toprule
-\textit{Pending: awaiting retrained checkpoints.} \\
+\textbf{Variant} & \textbf{Day fair} & \textbf{Day rain} & \textbf{Night fair} & \textbf{Night rain} & \textbf{Snow} \\
+                 & \textit{(661)} & \textit{(122)} & \textit{(146)} & \textit{(43)} & \textit{(29)} \\
+\midrule
+Raw SAM                & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
+Swin only              & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
+Swin + disc.\ (no VLM) & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
+Triage (LLaVA)         & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
+Triage (Qwen)          & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
+Triage + disc.\ (LLaVA)& \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
+Triage + disc.\ (Qwen) & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}

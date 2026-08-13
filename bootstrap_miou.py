@@ -33,6 +33,10 @@ def load_variant(path: Path) -> dict:
     d = json.loads(path.read_text())
     out = {"name": path.stem, "classes": d["eval_classes"], "conditions": {}}
     for cond, frames in d["conditions"].items():
+        # Sorted by frame so two dumps of the same frames align regardless of the
+        # order each was written in. The bootstrap resamples indices within a
+        # condition, so order is otherwise irrelevant.
+        frames = sorted(frames, key=lambda f: f["frame"])
         out["conditions"][cond] = {
             "frames": [f["frame"] for f in frames],
             "overlap": np.array([f["overlap"] for f in frames]),
@@ -115,6 +119,7 @@ def main() -> None:
     files = sorted(args.metrics_dir.glob("*.json"))
     if not files:
         raise SystemExit(f"No JSONs in {args.metrics_dir}")
+
     variants = [load_variant(f) for f in files]
     check_aligned(variants)
     classes = variants[0]["classes"]

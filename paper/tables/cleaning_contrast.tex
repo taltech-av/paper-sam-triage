@@ -1,0 +1,38 @@
+% The controlled human-cleaning experiment. Two configs under
+% config/vlm/clftv2-base/cleaning/ in the fusion-training repo, driven by
+% slurms/clftv2/run_vlm_campaign.sh cleaning. They differ in exactly one field,
+% annotation_path; splits, architecture and hyperparameters are byte-identical.
+% The lower block is the result to read — see the caption.
+\begin{table}[t]
+\centering
+\caption{Does human cleaning of the labels change what a model learns?
+         Both arms train on the same 651 frames and are evaluated on the same held-out 201, against
+         the human labels. They differ by exactly one variable: the masks a human called incorrect
+         are erased in one arm and kept in the other. Cleaning only ever deletes --- the human set is
+         a strict subset of the raw one --- so no other difference exists to explain a gap.
+         This experiment is separate from Table~\ref{tab:ablation} because it is the one comparison
+         in which training-set size can be held fixed: human labels exist for 1{,}001 frames and the
+         pipeline variants have 4{,}110, so a human row inside that ladder would confound label
+         quality with annotation volume.
+         The aggregate is expected to be small: cleaning removes 5.3\,\% of the object pixels, and
+         the upper block is reported with its interval rather than as a point estimate for that
+         reason.
+         The lower block is where the effect is legible --- per class, the IoU change is read against
+         how much of that class the human actually deleted, which is the dose the arm received. \pendingnote}
+\label{tab:cleaning}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Arm} & \textbf{mIoU} & \textbf{fw-IoU} & \textbf{$\Delta$mIoU (95\,\% CI)} \\
+\midrule
+Raw SAM (uncleaned)   & \pending{--} & \pending{--} & \textemdash \\
+Human-cleaned         & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+\midrule
+\multicolumn{4}{l}{\textit{Per class: cleaning dose against IoU change}} \\
+\textbf{Class} & \textbf{Px removed} & \textbf{\% of class} & \textbf{$\Delta$IoU} \\
+\midrule
+Human (cyc.\ + ped.) & 535{,}244 & 20.9 & \pending{--} \\
+Sign                 & 693{,}239 & 12.2 & \pending{--} \\
+Vehicle              & 864{,}715 &  3.5 & \pending{--} \\
+\bottomrule
+\end{tabular}
+\end{table}

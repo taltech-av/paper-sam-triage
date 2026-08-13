@@ -100,7 +100,8 @@ import config
 from analyze_human_verification import CORRECT, Tee, load_masks, run_tags
 from core.mask_extractor import extract_proposals
 from make_splits import (WEATHER_CATEGORIES, analyze_frames, balance_table,
-                         pixel_balanced_splits, write_report, write_split)
+                         labelling_order, pixel_balanced_splits, write_report,
+                         write_split)
 
 # Swin proposes three classes; two map straight onto a pipeline class, the third
 # is the split only a VLM confirmation resolves (see module docstring).
@@ -412,7 +413,8 @@ def report_classes(totals: dict[tuple[str, str], int], pixels: dict[tuple[str, s
 
 
 def write_splits(written: list[str], annotation_dir: Path, splits_dir: Path,
-                 val_ratio: float, test_ratio: float, seed: int) -> None:
+                 val_ratio: float, test_ratio: float, seed: int,
+                 export: Path | None = None) -> None:
     """Cut the frames just written into train / validation / test.
 
     The per-weather `test_*.txt` files matter as much as `test.txt`: both
@@ -423,6 +425,13 @@ def write_splits(written: list[str], annotation_dir: Path, splits_dir: Path,
     which is why the comparison is meant to be read off the pooled per-frame
     dump (`dump_frame_metrics.py` → `bootstrap_miou.py`), where every test frame
     carries equal weight and the arms are paired on identical frames.
+
+    Labelling order is balanced alongside the class pixel mass. The human
+    reference is non-stationary — precision falls about 2 points per 100 frames
+    judged and has not plateaued — so a split drawn mostly from early frames is
+    graded against a measurably more permissive standard than one drawn from
+    late frames. It happened to come out even last time; balancing it means that
+    stops being luck as the export grows.
     """
     splits_dir.mkdir(parents=True, exist_ok=True)
     # make_splits works in bare ids ('011134'); this script carries the PNG stem
@@ -431,6 +440,13 @@ def write_splits(written: list[str], annotation_dir: Path, splits_dir: Path,
     # Pixel counts come from the clean annotations, not annotation_sam: the
     # split is balanced on the labels it will actually be trained and scored on.
     records = analyze_frames(frame_ids, annotation_dir)
+    if export is not None:
+        ranks = labelling_order(export)
+        if all(rec["frame_id"] in ranks for rec in records):
+            for rec in records:
+                rec["era_rank"] = ranks[rec["frame_id"]]
+        else:
+            print("  NOTE: some frames carry no labelling order — era balancing skipped")
     train, val, test = pixel_balanced_splits(records, val_ratio, test_ratio, seed)
 
     print(f"\nSplits → {splits_dir}   "
@@ -604,7 +620,7 @@ def run(args, kinds: set[str], out_root: Path) -> None:
 
     if not args.no_splits:
         write_splits(written, annotation_dir, out_root / "splits",
-                     args.val_ratio, args.test_ratio, args.seed)
+                     args.val_ratio, args.test_ratio, args.seed, export=args.export)
 
     report_training(out_root, annotation_dir, ids, len(written))
 

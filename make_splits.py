@@ -58,9 +58,11 @@ Outputs (written to --out-dir):
 """
 
 import argparse
+import csv
 import json
 import math
 import random
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -139,6 +141,30 @@ def count_pixels(frame_id: str, ann_dir: Path) -> dict[int, int]:
         return {}
     arr = np.array(Image.open(ann_path))
     return {cls: int((arr == cls).sum()) for cls in range(6) if (arr == cls).any()}
+
+
+def labelling_order(export_path: Path) -> dict[str, int]:
+    """frame_id → 1-based rank of when the labeller first answered that frame.
+
+    The human reference is non-stationary: precision falls about 2 points per
+    100 frames labelled and has not plateaued, so *when* a frame was judged is a
+    property of its labels, not of the scene. Balancing it keeps a split from
+    being graded against a systematically stricter standard than it was trained
+    on. Rank rather than timestamp, so idle gaps between sessions carry no weight.
+    """
+    first: dict[str, str] = {}
+    with open(export_path, newline="") as handle:
+        for row in csv.DictReader(handle):
+            if not row.get("verdict"):
+                continue
+            match = re.search(r"frame_(\d+)", row["frame"])
+            if not match:
+                continue
+            fid, stamp = match.group(1), row["answeredAt"]
+            if fid not in first or stamp < first[fid]:
+                first[fid] = stamp
+    return {fid: rank + 1 for rank, (fid, _) in
+            enumerate(sorted(first.items(), key=lambda kv: kv[1]))}
 
 
 def analyze_frames(frame_ids: list[str], ann_dir: Path) -> list[dict]:
@@ -241,6 +267,26 @@ def _class_mass(records: list[dict]) -> dict[int, int]:
     return {cls: sum(r["pixel_counts"].get(cls, 0) for r in records) for cls in OBJECT_CLASSES}
 
 
+def _balance_matrix(records: list[dict]) -> np.ndarray:
+    """Per-frame contribution to each balanced quantity, one column per quantity.
+
+    Every column is divided by its own total over `records`, so a column's units
+    do not matter and a 720k-pixel pedestrian corpus gets the same say as a 19M
+    -pixel vehicle one. Columns are the object classes' pixel mass, plus — when
+    the frames carry an `era_rank` (see `labelling_order`) — one more for the
+    labelling order. Frame counts per split are fixed before the search runs, so
+    equalising each split's share of the summed rank is equalising its *mean*
+    labelling order, which is the quantity that matters.
+    """
+    mass = _class_mass(records)
+    columns = [[rec["pixel_counts"].get(cls, 0) / mass[cls] for rec in records]
+               for cls in OBJECT_CLASSES if mass[cls] > 0]
+    era_total = sum(rec.get("era_rank", 0) for rec in records)
+    if era_total and all("era_rank" in rec for rec in records):
+        columns.append([rec["era_rank"] / era_total for rec in records])
+    return np.array(columns, dtype=float).T.reshape(len(records), len(columns))
+
+
 def _apportion(total: int, ratios: list[float]) -> list[int]:
     """Largest-remainder apportionment — integer counts summing exactly to total."""
     exact = [total * r for r in ratios]
@@ -295,15 +341,12 @@ def _allocate_condition(records: list[dict], ratios: dict[str, float],
     total = len(records)
     quota = _apportion(total, [ratios[s] for s in names])
 
-    mass = _class_mass(records)
-    live = [c for c in OBJECT_CLASSES if mass[c] > 0]
-    pixels = np.array([[rec["pixel_counts"].get(c, 0) / mass[c] for c in live]
-                       for rec in records], dtype=float).reshape(total, len(live))
+    pixels = _balance_matrix(records)
 
     # Start from a proportional deal of the influence-ordered frames — the
     # heaviest frame of the rarest class first, spread across the splits — so
     # the search begins near a solution rather than at a random one.
-    influence = pixels.max(axis=1) if live else np.zeros(total)
+    influence = pixels.max(axis=1) if pixels.shape[1] else np.zeros(total)
     order = sorted(range(total), key=lambda i: (-influence[i], records[i]["frame_id"]))
     labels = np.empty(total, dtype=int)
     filled = [0] * len(names)
@@ -344,28 +387,22 @@ def _allocate_condition(records: list[dict], ratios: dict[str, float],
     return assigned
 
 
-def pixel_balanced_splits(
-    records: list[dict],
-    val_ratio: float,
-    test_ratio: float,
-    seed: int,
-) -> tuple[list[dict], list[dict], list[dict]]:
-    """Splits that match on weather, frame count *and* per-class pixel mass.
+def _deal(records: list[dict], ratios: dict[str, float],
+          rng: random.Random) -> dict[str, list[dict]]:
+    """Allocate every frame to one of `ratios`' keys, weather held exactly.
 
     Weather is exact rather than balanced: each condition is allocated on its
-    own, so a split's weather profile is the corpus profile by construction and
-    only the class content is left to the greedy rule.
+    own, so every part's weather profile is the corpus profile by construction
+    and only the class content is left to the local search.
     """
-    ratios = {"train": 1.0 - val_ratio - test_ratio, "val": val_ratio, "test": test_ratio}
     if min(ratios.values()) <= 0:
         raise ValueError(f"ratios must all be > 0, got {ratios}")
 
-    rng = random.Random(seed)
     by_weather: dict[str, list[dict]] = defaultdict(list)
     for rec in records:
         by_weather[rec["weather"]].append(rec)
 
-    out: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    out: dict[str, list[dict]] = {name: [] for name in ratios}
     for weather in sorted(by_weather):
         group = sorted(by_weather[weather], key=lambda r: r["frame_id"])
         for name, part in _allocate_condition(group, ratios, rng).items():
@@ -373,6 +410,19 @@ def pixel_balanced_splits(
 
     for split in out.values():
         rng.shuffle(split)
+    return out
+
+
+def pixel_balanced_splits(
+    records: list[dict],
+    val_ratio: float,
+    test_ratio: float,
+    seed: int,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Splits that match on weather, frame count *and* per-class pixel mass."""
+    out = _deal(records,
+                {"train": 1.0 - val_ratio - test_ratio, "val": val_ratio, "test": test_ratio},
+                random.Random(seed))
     return out["train"], out["val"], out["test"]
 
 
@@ -430,6 +480,17 @@ def balance_table(records: list[dict], splits: list[tuple[str, list[dict]]]) -> 
         lines.append(f"    {name:8} {len(split):8d} {_pct(len(split), total_frames):>9}{shares}")
     lines.append(f"    {'TOTAL':8} {total_frames:8d} {'100.0%':>9}"
                  + "".join(f"{m:12,d}p" for m in (mass[c] for c in OBJECT_CLASSES)))
+
+    # Mean labelling order, when the frames carry one. The reference drifts by
+    # roughly 2 points of precision per 100 frames labelled, so two splits whose
+    # means are far apart are being held to different standards, and a
+    # difference between them is partly the annotator changing their mind.
+    if all("era_rank" in r for r in records):
+        lines += ["", "  Mean labelling order (drift check — these should be close):"]
+        for name, split in splits:
+            if split:
+                mean = sum(r["era_rank"] for r in split) / len(split)
+                lines.append(f"    {name:8} {mean:8.0f}  of {total_frames}")
     return "\n".join(lines)
 
 
@@ -473,6 +534,37 @@ def write_split(records: list[dict], path: Path) -> None:
     print(f"  {path.name:30s}  {len(records):5d} frames")
 
 
+def write_split_set(out_dir: Path, records: list[dict], train: list[dict],
+                    val: list[dict], test: list[dict]) -> None:
+    """One complete split directory: the three lists, per-weather test subsets,
+    all.txt, a visualisation sample and the distribution report."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_split(train, out_dir / "train.txt")
+    write_split(val,   out_dir / "validation.txt")
+    write_split(test,  out_dir / "test.txt")
+
+    for weather in WEATHER_CATEGORIES:
+        subset = [r for r in test if r["weather"] == weather]
+        if subset:
+            write_split(subset, out_dir / f"test_{weather}.txt")
+
+    write_split(records, out_dir / "all.txt")
+
+    # visualizations.txt — 2 frames per weather condition (one rare-class, one common)
+    vis: list[dict] = []
+    for weather in WEATHER_CATEGORIES:
+        pool = [r for r in records if r["weather"] == weather]
+        rare   = [r for r in pool if r["has_rare"]]
+        common = [r for r in pool if not r["has_rare"]]
+        if rare:
+            vis.append(rare[0])
+        if common:
+            vis.append(common[0])
+    write_split(vis, out_dir / "visualizations.txt")
+
+    write_report(records, train, val, test, out_dir / "report.txt")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -498,6 +590,19 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument("--cache", action="store_true",
                         help="Load frame_analysis.json if it exists (skip re-counting pixels)")
+    parser.add_argument("--test-frames",
+                        help="Frame-list CSV naming the frames that must form the test split. "
+                             "The rest are dealt into train/val by --val-ratio. Use this when "
+                             "the test set is decided by something other than chance — e.g. "
+                             "the frames a human has verified are the only ones with an "
+                             "admissible reference, so they are the test set and nothing else "
+                             "can be. --test-ratio is ignored.")
+    parser.add_argument("--era-csv", type=Path,
+                        help="Verification export CSV. Adds each frame's labelling order to "
+                             "the balanced quantities, so no split is graded against a "
+                             "systematically stricter reference than another. Only affects "
+                             "--balance pixels; frames absent from the export are dropped "
+                             "from the era term.")
     args = parser.parse_args()
 
     out_dir  = Path(args.out_dir)
@@ -510,11 +615,16 @@ def main() -> None:
     print(f"Frames    : {len(frame_ids)} from {args.frames}")
     print(f"Annotation: {ann_dir}")
     print(f"Output    : {out_dir}")
-    print(f"Split     : train={1-args.val_ratio-args.test_ratio:.0%}  "
-          f"val={args.val_ratio:.0%}  test={args.test_ratio:.0%}  "
-          f"balance={args.balance}  "
-          f"min_test_per_weather={args.min_test_per_weather if args.balance == 'weather' else 'n/a'}  "
-          f"seed={args.seed}")
+    balance = args.balance
+    if args.test_frames:
+        print(f"Split     : test fixed by {args.test_frames}  val={args.val_ratio:.0%} of the "
+              f"remainder  balance={balance}  seed={args.seed}")
+    else:
+        print(f"Split     : train={1-args.val_ratio-args.test_ratio:.0%}  "
+              f"val={args.val_ratio:.0%}  test={args.test_ratio:.0%}  "
+              f"balance={balance}  "
+              f"min_test_per_weather={args.min_test_per_weather if balance == 'weather' else 'n/a'}  "
+              f"seed={args.seed}")
 
     # Analyze frames (or load cache)
     cache_path = out_dir / "frame_analysis.json"
@@ -539,42 +649,42 @@ def main() -> None:
     if missing_meta:
         print(f"  WARNING: {missing_meta} frames missing ZOD metadata — assigned 'day_fair'")
 
+    # Labelling order, when the reference's drift has to be balanced away
+    if args.era_csv:
+        ranks = labelling_order(args.era_csv)
+        hit = 0
+        for rec in records:
+            if rec["frame_id"] in ranks:
+                rec["era_rank"] = ranks[rec["frame_id"]]
+                hit += 1
+        print(f"  Labelling order from {args.era_csv}: {hit}/{len(records)} frames matched")
+        if hit != len(records):
+            print("  NOTE: not every frame carries an order — the era term is skipped "
+                  "(it is only applied when the whole set has one)")
+
     # Create stratified splits
-    if args.balance == "pixels":
+    if args.test_frames:
+        forced = {parse_frame_id(l) for l in Path(args.test_frames).read_text().splitlines()
+                  if l.strip()}
+        test = [r for r in records if r["frame_id"] in forced]
+        rest = [r for r in records if r["frame_id"] not in forced]
+        unseen = forced - {r["frame_id"] for r in records}
+        print(f"\nTest fixed at {len(test)} frames from {args.test_frames}"
+              + (f"  ({len(unseen)} of them are not in --frames and were ignored)" if unseen else ""))
+        if not rest:
+            raise SystemExit("--test-frames covers every frame; nothing left to train on")
+        parts = _deal(rest, {"train": 1.0 - args.val_ratio, "val": args.val_ratio},
+                      random.Random(args.seed))
+        train, val = parts["train"], parts["val"]
+    elif balance == "pixels":
         train, val, test = pixel_balanced_splits(records, args.val_ratio, args.test_ratio, args.seed)
     else:
         train, val, test = make_splits(records, args.val_ratio, args.test_ratio, args.seed,
                                        min_test_per_weather=args.min_test_per_weather)
     print(f"\nSplit sizes:  train={len(train)}  val={len(val)}  test={len(test)}")
 
-    # Write split files
     print("\nWriting splits:")
-    write_split(train, out_dir / "train.txt")
-    write_split(val,   out_dir / "validation.txt")
-    write_split(test,  out_dir / "test.txt")
-
-    for weather in WEATHER_CATEGORIES:
-        subset = [r for r in test if r["weather"] == weather]
-        if subset:
-            write_split(subset, out_dir / f"test_{weather}.txt")
-
-    # all.txt — every frame in the dataset
-    write_split(records, out_dir / "all.txt")
-
-    # visualizations.txt — 2 frames per weather condition (one rare-class, one common)
-    vis: list[dict] = []
-    for weather in WEATHER_CATEGORIES:
-        pool = [r for r in records if r["weather"] == weather]
-        rare   = [r for r in pool if r["has_rare"]]
-        common = [r for r in pool if not r["has_rare"]]
-        if rare:
-            vis.append(rare[0])
-        if common:
-            vis.append(common[0])
-    write_split(vis, out_dir / "visualizations.txt")
-
-    # Write report
-    write_report(records, train, val, test, out_dir / "report.txt")
+    write_split_set(out_dir, records, train, val, test)
 
     # Print quick summary
     print(f"\nWeather × rare-class strata:")

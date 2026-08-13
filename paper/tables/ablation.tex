@@ -1,17 +1,33 @@
+% Seven rows, one per scheduled training run. The configs are
+% config/vlm/clftv2-base/{shared,llava,qwen}/ in the fusion-training repo and the
+% runs are driven by slurms/clftv2/run_vlm_campaign.sh ladder.
+% Two rows that appeared in earlier drafts are deliberately gone:
+%   · "Human-verified" — the human labels cover 1,001 frames against these
+%     variants' 2,642, so the comparison confounded label quality with training
+%     -set size. It is now its own controlled experiment, Table~\ref{tab:cleaning}.
+%   · "SAM (curated)" — a clean-partition baseline at a different annotation
+%     volume, which reintroduces exactly that confound and has no config.
 \begin{table*}[t]
 \centering
 \caption{Annotation variant ablation on CLFTv2-Base (RGB--LiDAR CrossFusion).
-         All variants are evaluated on the same held-out test frames against the human-verified reference,
-         so scores are directly comparable across rows.
-         mIoU averages vehicle, sign, and human (cyclist + pedestrian combined) and is the mean over the five weather-condition mIoUs;
-         fw-IoU weights each class by its pixel frequency.
-         The last column reports the \emph{paired} difference in mIoU against the Swin only variant, with a 95\% CI from a bootstrap over test frames
-         (10{,}000 resamples, stratified by weather condition; the same resample indices are applied to every variant).
-         A paired difference is the statistic this design supports: all variants are evaluated on the same frames,
-         so per-variant marginal CIs overlap far more than the differences themselves and understate the separation.
-         An interval excluding zero means the variant differs significantly from Swin only.
-         Bold marks the best result in each metric column.
-         Rows without numbers are planned runs whose checkpoints do not exist yet.}
+         The ladder is nested: each step adds exactly one pipeline stage to the one above it, so a
+         change in score is attributable to that stage and to nothing else.
+         All variants train on the same 2{,}642 frames --- the flagged frames that carry no human
+         labels --- and are evaluated on the same held-out 1{,}001 frames, which are exactly the
+         frames a human verified, against those human labels.
+         No human label is therefore spent on training, and the evaluation reference is independent
+         of every variant's own training labels: scoring a model against the pseudo-labels it was
+         trained on measures label self-consistency rather than segmentation quality, and inflates
+         precisely the variants with the most idiosyncratic labels.
+         mIoU averages vehicle, sign, and human (cyclist + pedestrian combined) and is the mean over
+         the five weather-condition mIoUs; fw-IoU weights each class by its pixel frequency.
+         The last column reports the \emph{paired} difference in mIoU against the Swin only variant,
+         with a 95\% CI from a bootstrap over test frames (10{,}000 resamples, stratified by weather
+         condition; the same resample indices are applied to every variant).
+         A paired difference is the statistic this design supports: all variants are evaluated on the
+         same frames, so per-variant marginal CIs overlap far more than the differences themselves and
+         understate the separation.
+         An interval excluding zero means the variant differs significantly from Swin only. \pendingnote}
 \label{tab:ablation}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llc ccccc l}
@@ -19,15 +35,14 @@
 \textbf{Variant} & \textbf{Description} & \textbf{VLM} &
   \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & \textbf{$\Delta$mIoU vs Swin only (95\% CI)} \\
 \midrule
-Human-verified & All 4,110 flagged frames manually verified; incorrect masks removed & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
-SAM (curated) & Manually reviewed clean-partition annotations & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
-Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
-Swin only & Swin agreement threshold; no VLM & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
-Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
-Triage & Swin + VLM + consistency & LLaVA & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
-Triage &  & Qwen & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
-Triage + disc. & Full pipeline & LLaVA & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
-Triage + disc. &  & Qwen & \textemdash & \textemdash & \textemdash & \textemdash & \textemdash & \textit{pending} \\
+Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+Swin only & Swin agreement threshold; no VLM & \textemdash & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \textemdash \\
+Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+\addlinespace
+Triage & Swin + VLM + consistency & LLaVA & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+Triage &  & Qwen & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+Triage + disc. & Full pipeline & LLaVA & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+Triage + disc. &  & Qwen & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
 \bottomrule
 \end{tabular}}
 \end{table*}
