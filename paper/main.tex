@@ -51,7 +51,7 @@
 % Pseudo-Labels": the results do not support selling the pipeline, they audit it,
 % and a title that promises a method invites reviewers to read the findings as a
 % failure to deliver one rather than as the contribution.
-\title{What Does a Vision--Language Model Add to SAM Pseudo-Label Refinement?\\A Human-Verified Audit}
+\title{Empirical Evaluation of VLM and Deterministic Triage Methods for SAM Pseudo-Label Generation}
 
 \author{\small Toomas Tahves$^{1}$, Mauro Bellone$^{2,3}$, Raivo Sell$^{1}$ \\
 $^{1}$\textit{Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia} \\
@@ -78,6 +78,7 @@ Rule engineering within a fixed signal set moves this operating point very littl
 Second, the criterion matters more than the rule: because a retained wrong mask injects wrong pixels while a deleted correct mask only omits them, pooled metrics such as F1 rank these rules in the opposite order to their downstream effect, rewarding whichever rule keeps the most labels.
 Scored on the two error directions separately, a free deterministic segmentation signal dominates zero-shot VLM triage on the direction that matters, at a fraction of the cost.
 Third, neither half of the pipeline earns its inference budget: removing masks is bounded by how few are wrong, and confirming candidate objects the proposal stage never generated adds only a few points of precision on genuinely missed objects while carrying no information at all on the boundary fringes that dominate the candidate pool. Downstream, the free deterministic quality signal is worth $+3.9$ mIoU over unfiltered SAM labels while object discovery costs $9.4$, and human deletion of 5.3\,\% of the object pixels --- at fixed training-set size --- is worth $+2.5$, so label purity rather than label volume is what binds.
+Joining each discovery candidate's geometry to the human verdict on it explains what the aggregate hides: four fifths of what the stage proposes is the rim of an object the pipeline had already segmented rather than a new object, and two thirds of those rims are wrong. In pixels, 61.7\,\% of what discovery adds is material a human rejected, amounting to 23.1\,\% of the object pixels in the labels it produces. The stage is a boundary editor sold as an object finder, and the property that separates its output is geometric --- decidable without a model call or a human label.
 Fourth, cross-model agreement is not a proxy for accuracy: the ranking of the two VLMs inverts when they are scored against human verdicts instead of against each other, the aggregate ordering is set by the class composition of the corpus rather than by competence, and prompt portability fails per-prompt rather than uniformly.
 We close with the cost accounting the human reference makes possible: at this model scale, verifying a frame with a VLM consumes several times more machine time than a human needs to verify the same frame by hand, which reframes where verification effort should be spent.
 All decisions trace to explicit agent outputs with no learned fusion weights, so every variant is reproducible from stored responses without re-running VLM inference.
@@ -244,6 +245,17 @@ is \emph{standalone}. Over the 55{,}252 candidates in this corpus, 16{,}402 (29.
 38{,}850 (70.3\,\%) are fringes. Precision on standalone candidates measures what discovery recovers;
 precision on fringes measures boundary completion on objects the pipeline already had. We report the two
 separately throughout, since a pooled rate is dominated by fringes and would read as a recall gain.
+
+The ring-share test is a threshold on how much of a neighbourhood is SAM-covered, and it is one-sided in
+its errors. Checked against the stricter question --- does the candidate abut a SAM mask of \emph{its
+own class} --- it is reliable on the fringe side, where 97.6\,\% of fringes do, but leaky on the other:
+33.3\,\% of the candidates it calls standalone abut a same-class mask as well, so a third of that
+stratum is rim rather than recovery and its 27.3\,\% precision is a mixture of the two.
+Where the distinction carries an argument we therefore use the class test rather than the ring share,
+and Table~\ref{tab:discovery_geometry} reports the candidate pool under it.
+The two vocabularies must be reconciled first: SAM proposals carry ZOD's four classes while candidates
+carry Swin's three, in which cyclist and pedestrian are a single \texttt{human} class, so both sides are
+folded to the coarser one --- the same fold the downstream mIoU uses --- before any class is compared.
 
 \subsection{Human Verification of the Annotation Set}
 \label{sec:human_verification}
@@ -458,6 +470,12 @@ what it is shown and actively misleading on the rest cannot justify one VLM call
 Because the human judged the candidate region itself, this measurement is not subject to the
 SAM-derived reference bias that affects the downstream comparison, and it is the more direct evidence
 of the two.
+What the confirmation gate is failing at, however, is not the task the stage was built for.
+Table~\ref{tab:discovery_geometry} decomposes the same candidates geometrically and finds that
+78.6\,\% of them are rims on objects the pipeline had already segmented, so the question most
+confirmation calls actually answer is whether a boundary should grow, not whether an object is there.
+The stage does recover genuine objects --- 841 of them here, concentrated in signs --- but they are
+6.1\,\% of what it proposes, and a per-candidate VLM call is spent on all of it.
 
 \input{tables/manual_verification}
 
@@ -528,12 +546,7 @@ damage is not confined to the classes discovery adds: vehicle IoU falls 9.0 poin
 the added regions degrade the model globally rather than trading one class against another. This is
 what the candidate-level measurement predicts: standalone candidates are 27.3\,\% real and
 confirmation moves that by about a point, while on fringes --- 70.3\,\% of the candidate pool --- the
-confirmed stratum is \emph{less} precise than the unconfirmed one. A stage that adds regions at those
-precisions cannot improve a label set except by accident, and at this volume it does not merely fail to
-help but overwhelms the one stage that does. Region geometry compounds the precision problem:
-candidates are Swin connected components computed at $384{\times}384$ and upsampled, so even a correct
-confirmation contributes an object with an approximate boundary, and the ladder cannot separate the
-cost of wrong regions from the cost of coarse ones.
+confirmed stratum is \emph{less} precise than the unconfirmed one.
 The discovery rows also carry an evaluation caveat the other rows do not: the human reference was
 built by judging SAM proposals and discovery candidates, so an object that neither stage ever proposed
 is absent from it, and a model that segments such an object is penalised. This biases the discovery
@@ -542,6 +555,52 @@ $-9.4$ point deficit is far outside what an unmeasured-object penalty of this ki
 explain.
 All discovery variants paint candidates as their exact connected-component masks rather than as filled
 bounding boxes.
+
+\textbf{The stage is a boundary editor that occasionally finds an object, not an object finder.}
+An aggregate precision does not say what a wrong candidate \emph{was}, and the two possibilities carry
+opposite implications. We therefore join every candidate's geometry to the human verdict on it
+(Table~\ref{tab:discovery_geometry}), asking whether the ring of SAM pixels around it contains a mask
+of the candidate's own class.
+Four out of five candidates (78.6\,\%) are rims on an object the pipeline had already segmented, and
+two thirds of those rims the human rejected: 52.0\,\% of all candidates are \emph{edge bleed}, a rim
+on a same-class mask judged not to be the object. Only 6.1\,\% are objects SAM missed entirely and a
+human confirmed. Under the end-of-pass calibration those become 64.0\,\% and 1.8\,\%.
+The stage was designed and described as object recovery; measured against a human, it is
+predominantly boundary editing, and predominantly wrong when it edits.
+The mechanism is visible in the per-class split: vehicles, which SAM finds reliably, yield the most
+boundary growth --- 39.3\,\% of their candidates and 42.5\,\% of their added pixels --- because on an
+object the pipeline already has there is nothing left to propose but its edge.
+
+\textbf{Discovery is not, however, useless, and the aggregate hides what it does recover.}
+The same join isolates 841 candidates --- 0.85 per frame, $\approx$3{,}400 extrapolated over the
+candidate pool --- that a human confirmed as objects SAM never proposed, 686 of them touching no SAM
+mask at all. They are overwhelmingly signs (662 of 841, 10.7\,\% of sign candidates against 1.7\,\% of
+vehicle ones). A stage that recovers several thousand real objects is doing something, and the earlier
+reading of the candidate-level precisions --- that discovery could not improve a label set except by
+accident --- was too strong. What sinks it is the exchange rate rather than the absence of finds: 0.85
+confirmed recoveries per frame are bought with 9.35 human-rejected regions painted into the same
+labels, an 11:1 ratio, and the downstream ladder scores the net.
+
+\textbf{In pixels, which is what the loss sees, the contamination is severe.}
+Candidate counts and painted pixels are different currencies, and a rim on a bus and a rim on a distant
+sign are one candidate each. We therefore re-derive what every candidate actually painted into the
+label, reproducing the pipeline's own operation --- the $384{\times}384$ component map upsampled to full
+resolution, claiming only pixels triage left as background --- and agreeing with the shipped annotation
+to 108\,px per frame against some 10{,}800 added per frame.
+Discovery adds 10.7\,M pixels to a label set already holding 28.5\,M object pixels, inflating the
+object-pixel budget by 37.5\,\%. Of those added pixels, 61.7\,\% are pixels a human marked as not the
+object --- which is 23.1\,\% of all object pixels in the resulting labels. Close to one in four object
+pixels the discovery variant trains on is a pixel the human reference says is background.
+A contamination of that magnitude is a sufficient explanation for a 9.4-point deficit, and it is
+measured rather than inferred; what remains unproven is only that it is the \emph{operative} one, which
+a variant gated on geometry rather than on a verdict would settle --- discarding candidates that abut a
+same-class mask, which needs no human label and no second model and so applies to all 4{,}110 frames.
+Weighting by pixels moves the balance slightly in discovery's favour rather than against it: genuine
+recoveries are larger than average regions and rise from 6.1\,\% of candidates to 9.3\,\% of added
+pixels, while edge bleed falls from 52.0\,\% to 47.5\,\%. The conclusion is unchanged and the mechanism
+is now quantified.
+
+\input{tables/discovery_geometry}
 
 \textbf{Two triage refinements are not separable from the shipped rule.}
 Section~\ref{sec:experiments} identifies two triage weaknesses from qualitative inspection: unilateral
@@ -768,7 +827,7 @@ closed; but the bar those runs must clear is a stage that is essentially free, a
 evidence has them on the wrong side of the error direction that matters. We would not deploy the VLM
 triage stage as an automatic filter on this data.
 
-\textbf{Drop discovery, or gate it on something other than a second VLM.}
+\textbf{Gate discovery on geometry, which is free, rather than on a second VLM, which is not.}
 Discovery is negative downstream at every configuration measured, and by a wide margin: $-9.4$ mIoU
 against the Swin-filtered labels, which is more than twice the filter's own contribution and leaves
 the labels worse than doing nothing at all. Section~\ref{sec:human_results} shows why at the level of
@@ -776,6 +835,14 @@ the candidates themselves: confirmation lifts
 standalone precision by about a point and inverts on fringes. Its regions are also coarse,
 being Swin components computed at $384{\times}384$ and upsampled, so even a correct confirmation adds
 an object with an approximate boundary.
+The corrective this points to is not a better confirmer but a cheaper filter applied earlier.
+Four fifths of what discovery proposes is the rim of an object the pipeline already had, and whether a
+candidate is such a rim is decidable from geometry alone --- does it abut a SAM mask of its own class
+--- with no model call and no human label. A practitioner keeping this stage should apply that test at
+proposal time and send only what survives it to whatever verifier they have; it costs nothing, it is
+the axis on which the candidate pool actually separates, and it leaves the 6.1\,\% of candidates that
+are genuine recoveries intact. Confirming rim candidates with a VLM, by contrast, spends one call per
+candidate on a question the model is measurably bad at and the geometry answers for free.
 
 \textbf{Spend the freed budget on human verification, and target it by mask, not by frame.}
 The cleaning contrast (Table~\ref{tab:cleaning}) is what makes this more than a preference: deleting
@@ -832,6 +899,7 @@ This work evaluates a multi-agent refinement pipeline for SAM-based annotation i
 
 Under a single evaluation reference with paired bootstrap confidence intervals, we compare filtering strategies that use no VLM against those that do. That reference is now the human pass itself: the verified frames are held out of training entirely and every ladder variant is scored on all of them, which removes the SAM-derived circularity that limited the earlier comparison; the VLM-dependent rows are supplied by runs still in progress and are reported as pending rather than carried over from the superseded checkpoints, which were trained on pre-correction annotations and scored against a different reference.
 The VLM-independent ladder is complete and its ordering is unambiguous. The free deterministic quality signal is the one automated stage that helps: thresholding on Swin agreement is worth $+3.9$ mIoU over unfiltered SAM labels for one forward pass per frame. Swin-driven object discovery is strongly negative, $-9.4$ mIoU against the same filtered labels and $-5.5$ against doing nothing at all, uniform across weather conditions and present in all three classes rather than confined to the ones it adds --- which is what the candidate-level precisions predicted and the aggregate confirms at more than twice the magnitude of the filter's gain.
+Joining candidate geometry to the human verdicts says what that stage was actually doing. It is not that discovery finds nothing: it recovers 841 objects here that SAM never proposed, some 3{,}400 extrapolated over the candidate pool, concentrated in signs. It is that those are 6.1\,\% of what it proposes, while 78.6\,\% are rims on objects the pipeline had already segmented and two thirds of those rims a human rejected --- 0.85 confirmed recoveries per frame against 9.35 rejected regions painted into the same labels. A stage built for object recovery is, measured against a human, mostly a boundary editor. In pixels the contamination is severe enough to account for the deficit on its own: discovery inflates the object-pixel budget by 37.5\,\%, 61.7\,\% of what it adds is pixels a human rejected, and those amount to 23.1\,\% of all object pixels in the labels it produces. We stop short only of calling that the operative cause rather than a sufficient one, which a variant gating candidates on whether they abut a same-class mask --- needing neither a model call nor a human label --- would settle.
 Human cleaning of the same labels, in a controlled arm where training-set size is held fixed and the only difference is whether rejected masks are erased, is worth $+2.5$ mIoU for the deletion of 5.3\,\% of object pixels, with a per-class response that tracks the per-class deletion dose. On this corpus, label purity is the binding constraint and human deletion is the cheapest way to buy it.
 It does not remove every limitation --- an object that neither SAM nor discovery ever proposed is absent from the reference, so a model that segments it is still penalised --- but the bias now runs only against the discovery variants, in the same direction the candidate-level measurement already establishes.
 
@@ -844,7 +912,12 @@ The human reference drifts, and the honest remedy is not more labelling under th
 protocol that pins the standard --- a fixed calibration set re-judged at intervals, or a rubric that
 makes the boundary criterion explicit --- since a reference that moves by twenty points across a pass
 bounds what any absolute rate measured against it can mean.
-Beyond that: correction mechanisms rather than further verification rules, cross-dataset transfer to
+Beyond that: the geometry-gated discovery variant identified above, which is one training run and would
+show whether suppressing the contamination recovers the deficit; re-prompting SAM on the rim candidates
+a human kept, for which the pixel accounting already supplies a ceiling --- confirmed boundary growth is
+10.8\,\% of all object pixels, so boundary repair is addressing a large target rather than a marginal
+one, and the obstacle is a mechanism that can redraw an edge rather than a shortage of edges to redraw;
+correction mechanisms rather than further verification rules; cross-dataset transfer to
 establish whether annotation quality affects more than in-domain mIoU, multi-seed replication,
 adaptive discovery thresholds, and extensions to panoptic or temporal segmentation.
 

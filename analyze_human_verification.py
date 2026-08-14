@@ -797,6 +797,187 @@ def report_discovery(all_rows: list[dict], tags: list[str], population: dict[str
     return table
 
 
+# --------------------------------------------------------------------------
+# Discovery geometry: what a candidate was sitting on, against what a human said
+# --------------------------------------------------------------------------
+
+# The four outcomes a discovery candidate can have once its geometry is joined to
+# the human verdict. Ordered worst-to-best as training labels.
+BLEED, GROWTH, ALARM, FIND = "edge bleed", "boundary growth", "false alarm", "new object"
+
+# SAM proposals carry ZOD's four classes; discovery candidates carry Swin's three,
+# in which cyclist and pedestrian are one `human` class (make_label_bundle's
+# SWIN_CLASS_NAMES — an unconfirmed candidate has no finer class to show a
+# labeler). Comparing the two raw would make every human-class candidate look as
+# though it abuts nothing, so both sides are folded to Swin's vocabulary first.
+# This is the same fold the downstream mIoU uses.
+CLASS_FOLD = {"cyclist": "human", "pedestrian": "human"}
+
+
+def fold_class(name: str | None) -> str | None:
+    return CLASS_FOLD.get(name, name)
+
+
+GEOMETRY_GLOSS = {
+    BLEED:  "rim on a same-class SAM mask, human rejected it — paint on background beside a "
+            "correct object",
+    GROWTH: "rim on a same-class SAM mask, human kept it — SAM under-segmented and the rim is "
+            "really the object",
+    ALARM:  "not on a same-class mask, human rejected it — a region Swin invented",
+    FIND:   "not on a same-class mask, human kept it — an object SAM missed entirely",
+}
+
+
+def abuts_same_class(row: dict, class_of: dict[tuple[str, int], str]) -> tuple[str, int]:
+    """
+    What the candidate is lying against: `same`, `other`, or `none`.
+
+    `touching_sam` is the list of SAM mask ids whose pixels fall in the candidate's
+    dilated ring, written by make_label_bundle at bundle time. It survives the CSV
+    round-trip as a bracketed string because `scalar` only casts things that start
+    with a digit, so it is parsed back here.
+
+    The class test is what separates the two mechanisms. A rim against a SAM mask
+    of the *same* class is the pipeline finding the edge of an object it already
+    has; a rim against a mask of a different class, or against nothing, is a claim
+    about an object that is not already in the labels.
+    """
+    try:
+        neighbours = json.loads(row.get("touching_sam") or "[]")
+    except (TypeError, ValueError):
+        neighbours = []
+    classes = [class_of.get((row["frame_id"], nid)) for nid in neighbours]
+    resolved = [name for name in classes if name is not None]
+    if not neighbours:
+        return "none", 0
+    if any(name == fold_class(row["class"]) for name in resolved):
+        return "same", len(classes) - len(resolved)
+    return "other", len(classes) - len(resolved)
+
+
+def geometry_of(row: dict, class_of: dict) -> str:
+    """The four-way outcome. `same` decides the mechanism, the verdict decides the sign."""
+    against, _ = abuts_same_class(row, class_of)
+    kept = row["human"] == CORRECT
+    if against == "same":
+        return GROWTH if kept else BLEED
+    return FIND if kept else ALARM
+
+
+def labelling_order(export: Path) -> dict[str, int]:
+    """
+    Frame stem → 1-based rank in labelling order, from the first verdict in each frame.
+
+    The reference is non-stationary (about 2 points of precision per 100 frames),
+    so any absolute share below is also reported over the final frames, which is
+    the calibration in force at the end of the pass.
+    """
+    first: dict[str, str] = {}
+    with export.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            if not row.get("verdict"):
+                continue
+            stem, stamp = Path(row["frame"]).stem, row.get("answeredAt") or ""
+            if stem not in first or stamp < first[stem]:
+                first[stem] = stamp
+    return {stem: rank + 1 for rank, (stem, _) in
+            enumerate(sorted(first.items(), key=lambda item: item[1]))}
+
+
+def geometry_table(rows: list[dict], class_of: dict, args, total: int | None = None) -> None:
+    """One block of the four-way taxonomy: counts, shares, and a CI on each share."""
+    total = total if total is not None else len(rows)
+    if not rows:
+        print("    (no candidates)")
+        return
+    tagged = [(geometry_of(row, class_of), row) for row in rows]
+    for outcome in (BLEED, GROWTH, ALARM, FIND):
+        subset = [row for kind, row in tagged if kind == outcome]
+        share = len(subset) / total if total else 0.0
+        ci = rate_ci(rows, lambda row, o=outcome: geometry_of(row, class_of) == o,
+                     args.bootstrap, args.seed)
+        interval = f"  [{100 * ci[0]:4.1f}, {100 * ci[1]:4.1f}]" if ci else ""
+        print(f"    {outcome:<16} n={len(subset):<6} {100 * share:5.1f}%{interval}   {GEOMETRY_GLOSS[outcome]}")
+
+
+def report_discovery_geometry(all_rows: list[dict], export: Path, args) -> None:
+    """
+    Why discovery costs downstream mIoU: what each candidate was sitting on.
+
+    The precision tables above ask whether a candidate is a real object. This asks
+    a different question — whether the pipeline was finding an object or finding
+    the edge of one it already had — because the two have opposite implications.
+    A rejected rim on an object SAM already segmented is not a missed find; it is
+    paint applied beside a correct mask, and since candidate components are
+    SAM-subtracted before they are formed, every one of those pixels lands outside
+    the existing mask rather than harmlessly on top of it.
+
+    `kind` (the ring-share test written at bundle time) and the class test here
+    disagree often enough to report both: a candidate can clear the ring-share
+    threshold and still be lying against a same-class mask, so `standalone` is not
+    a synonym for "SAM had nothing here".
+    """
+    class_of = {(row["frame_id"], row["id"]): fold_class(row.get("class")) for row in all_rows}
+    rows = [row for row in all_rows if row.get("source") == "discovery" and row["human"]]
+    if not rows:
+        print("\n  No answered discovery candidates in this export.")
+        return
+    unresolved = sum(abuts_same_class(row, class_of)[1] for row in rows)
+    if unresolved:
+        print(f"\n  NOTE: {unresolved} touching-mask ids did not resolve to a mask in the export; "
+              f"those neighbours are ignored in the class test.")
+
+    print(f"\n{len(rows):,} answered discovery candidates over "
+          f"{len({row['frame_id'] for row in rows}):,} frames.")
+
+    print("\nAs the bundle classified them (ring-share geometry) against the human verdict:")
+    print(f"  {'':<12}{'human removed':>16}{'human kept':>14}{'total':>10}")
+    for kind in ("fringe", "standalone"):
+        subset = [row for row in rows if row.get("kind") == kind]
+        removed = sum(1 for row in subset if row["human"] == INCORRECT)
+        kept = len(subset) - removed
+        print(f"  {kind:<12}{removed:>10,} {100 * removed / len(rows):4.1f}%"
+              f"{kept:>8,} {100 * kept / len(rows):4.1f}%{len(subset):>10,}")
+
+    print("\nWith the class test — is the mask it abuts the same class as the candidate?")
+    geometry_table(rows, class_of, args)
+
+    print("\n  The ring-share test and the class test disagree on:")
+    for kind in ("fringe", "standalone"):
+        subset = [row for row in rows if row.get("kind") == kind]
+        if not subset:
+            continue
+        same = sum(1 for row in subset if abuts_same_class(row, class_of)[0] == "same")
+        print(f"    {kind:<12} {same:,} of {len(subset):,} ({100 * same / len(subset):.1f}%) "
+              f"abut a same-class SAM mask")
+
+    print("\nPer class (share of that class's candidates):")
+    for name in sorted({row["class"] for row in rows if row.get("class")}):
+        subset = [row for row in rows if row.get("class") == name]
+        counts = Counter(geometry_of(row, class_of) for row in subset)
+        parts = "  ".join(f"{outcome} {100 * counts[outcome] / len(subset):5.1f}%"
+                          for outcome in (BLEED, GROWTH, ALARM, FIND))
+        print(f"  {name:<12} n={len(subset):<6} {parts}")
+
+    # The reference drifts, so the shares above are a mixture over a moving
+    # standard. The ratio between outcomes is far more stable than any absolute
+    # rate, but where an absolute share carries an argument the paper's own rule is
+    # to give the final-frames value too.
+    order = labelling_order(export)
+    have_order = [row for row in rows if row["frame_id"] in order]
+    if len(have_order) < len(rows):
+        print(f"\n  NOTE: {len(rows) - len(have_order)} candidates carry no labelling order; "
+              f"the drift check below covers the rest.")
+    for window in (200, 400):
+        cutoff = max(order.values(), default=0) - window
+        recent = [row for row in have_order if order[row["frame_id"]] > cutoff]
+        if not recent:
+            continue
+        print(f"\nFinal {window} frames only ({len(recent):,} candidates) — the calibration in force "
+              f"at the end of the pass:")
+        geometry_table(recent, class_of, args)
+
+
 def write_latex(table: list[dict], path: Path, kind: str) -> None:
     scope = {
         "standalone": "Candidates are restricted to those covering image regions SAM segmented "
@@ -894,6 +1075,10 @@ def report(args) -> None:
             if args.latex_out and kind == args.latex_kind:
                 write_latex(table, args.latex_out, kind)
 
+    if args.only in (None, "geometry") and by_source["discovery"]:
+        header("DISCOVERY GEOMETRY — what the candidate was sitting on")
+        report_discovery_geometry(rows, args.export, args)
+
     header("READING THIS REPORT")
     print("  Every rule above is scored on the same masks, so differences are paired.")
     print("  Rank triage variants on `bad kept` (wrong pixels entering the label) against")
@@ -908,7 +1093,8 @@ def main() -> int:
                         help="job manifest JSON from label-front — bundle-wide totals, for extrapolation")
     parser.add_argument("--tags", nargs="+",
                         help="runs to score (default: every run named in the export)")
-    parser.add_argument("--only", choices=["sam", "variants", "discovery"], help="report one section only")
+    parser.add_argument("--only", choices=["sam", "variants", "discovery", "geometry"],
+                        help="report one section only")
     parser.add_argument("--bootstrap", type=int, default=10000,
                         help="frame-clustered resamples for each 95%% CI (0 = skip)")
     parser.add_argument("--seed", type=int, default=42)
