@@ -1,0 +1,42 @@
+% Seven rows, one per scheduled training run. The configs are
+% config/vlm/clftv2-base/{shared,llava,qwen}/ in the fusion-training repo and the
+% runs are driven by slurms/clftv2/run_vlm_campaign.sh ladder.
+% Two rows that appeared in earlier drafts are deliberately gone:
+%   · "Human-verified" — the human labels cover 1,001 frames against these
+%     variants' 2,642, so the comparison confounded label quality with training
+%     -set size. It is now its own controlled experiment, Table~\ref{tab:cleaning}.
+%   · "SAM (curated)" — a clean-partition baseline at a different annotation
+%     volume, which reintroduces exactly that confound and has no config.
+\begin{table*}[t]
+\centering
+\caption{Annotation variant ablation on CLFTv2-Base (RGB--LiDAR CrossFusion). The ladder is nested:
+         each step adds exactly one pipeline stage, so a change in score is attributable to that
+         stage. All variants train on the same 2{,}642 flagged frames carrying no human labels and
+         are evaluated on the same held-out 1{,}001 human-verified frames against those labels, so
+         no human label is spent on training and no variant is graded against its own labels.
+         mIoU averages vehicle, sign, and human (cyclist $+$ pedestrian), taken as the mean over the
+         five weather-condition mIoUs; fw-IoU weights each class by pixel frequency.
+         The last column is the \emph{paired} mIoU difference against Swin only, with a 95\,\% CI
+         from 10{,}000 weather-stratified resamples of the test frames using identical indices for
+         every variant; an interval excluding zero means the variant differs significantly.
+         The three VLM-independent rows and both triage rows are final; the two full-pipeline rows
+         are \pending{pending} on runs still in progress and no value is reported for them in
+         advance.}
+\label{tab:ablation}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llc ccccc l}
+\toprule
+\textbf{Variant} & \textbf{Description} & \textbf{VLM} &
+  \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & \textbf{$\Delta$mIoU vs Swin only (95\% CI)} \\
+\midrule
+Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & 67.5 & 31.1 & 25.3 & 40.3 & 58.9 & $-3.9$ \ [$-5.3$, $-2.5$] \\
+\textbf{Swin only} & Swin agreement threshold; no VLM & \textemdash & \textbf{69.6} & \textbf{37.8} & \textbf{28.4} & \textbf{44.2} & \textbf{61.8} & \textemdash \ \textit{(reference)} \\
+Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & 60.6 & 25.3 & 21.7 & 34.8 & 52.4 & $-9.4$ \ [$-10.4$, $-8.4$] \\
+\addlinespace
+Triage & Swin + VLM + consistency & LLaVA & 67.5 & 35.4 & 26.8 & 41.1 & 59.6 & $-3.0$ \ [$-4.5$, $-1.6$] \\
+Triage &  & Qwen & 68.5 & 33.3 & 28.0 & 41.5 & 60.1 & $-2.7$ \ [$-4.1$, $-1.5$] \\
+Triage + disc. & Full pipeline & LLaVA & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+Triage + disc. &  & Qwen & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+\bottomrule
+\end{tabular}}
+\end{table*}

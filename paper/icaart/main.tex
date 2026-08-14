@@ -1,0 +1,491 @@
+% =============================================================================
+% ICAART 2027 submission. Target: 6 pages.
+%
+% !! FORMAT !! This is drafted in two-column IEEEtran so it compiles here. ICAART
+% is a SCITEPRESS venue and requires SCITEPRESS.cls (single column, apalike bib).
+% Before submission: download the ICAART 2027 author kit, swap \documentclass and
+% the bibliography style, and re-fit. Single-column will change the page count
+% materially, so treat the current page number as indicative only.
+%
+% This paper is the SYSTEM half of the split. It owns:
+%   · the five-agent architecture, the output contracts and the safe-default policy
+%   · the controlled cross-backend comparison (LLaVA-1.6-34B vs Qwen2.5-VL-72B)
+%   · prompt portability, per-agent and per-class
+%   · the serving-fault disclosure and the response-provenance decomposition
+%   · deployment cost, and the qualitative behaviour of the triage rule
+%
+% It does NOT own: the human reference construction, the purity/volume analysis,
+% the downstream mIoU ladder, the discovery geometry decomposition, the cleaning
+% contrast, or review targeting. Those are \cite{audit}. Tables and diagrams here
+% are disjoint from that paper's by construction -- see paper/SPLIT.md.
+%
+% ALL NUMBERS BELOW COME FROM tables/*.tex, which compare_models.py regenerated on
+% the full 4,110-frame / 90,176-mask paired set. Do not reintroduce figures from
+% the superseded 3,535-frame draft.
+% =============================================================================
+\documentclass[conference]{IEEEtran}
+\pdfminorversion=4
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{url}
+\usepackage[compatibility=false]{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes, backgrounds}
+\usepackage{pgfplots}
+
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+\title{Evaluating Multi-Agent Consensus and Failure Modes in Open VLM Annotation Workflows}
+
+\author{\small Toomas Tahves$^{1}$, Mauro Bellone$^{2,3}$, Raivo Sell$^{1}$ \\
+$^{1}$\textit{Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia} \\
+$^{2}$\textit{FinEst Centre for Smart Cities, Tallinn University of Technology, Estonia} \\
+$^{3}$\textit{Department of Computer Science and Engineering, Universitas Mercatorum, Rome, Italy}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Multi-agent systems built on vision--language models (VLMs) are increasingly used to audit machine
+generated annotations, with each agent given a role, a fixed prompt, and a constrained output
+vocabulary. Such a design implicitly assumes the backend is a replaceable component: swap the model,
+keep the prompts, and expect the same behaviour at a different cost. We test that assumption
+directly. In an annotation system where five agents assess Segment Anything Model proposals over
+driving scenes, we run two open-weight backends --- LLaVA-1.6-34B and Qwen2.5-VL-72B --- across
+4{,}110 frames and 90{,}176 mask proposals under byte-identical prompts and verified-identical
+non-VLM inputs, so any behavioural difference is attributable to the model alone. Portability fails,
+and it fails unevenly. The two backends return the same verdict on only 57.0\,\% of crops. Neither
+is uniformly more selective: relative to LLaVA, Qwen rejects far fewer signs (10.8\,\% vs.\
+26.0\,\%) and cyclists, yet substantially more vehicles (16.3\,\% vs.\ 5.1\,\%) and pedestrians. On
+object discovery the two agree in aggregate, 82.4\,\% against 83.9\,\%, while the entire divergence
+concentrates in the single prompt requiring a three-way discrimination rather than a presence check,
+where confirmation collapses from 85.9\,\% to 45.3\,\% --- a 41-point deficit on the two
+safety-critical classes that one aggregate rate per model would have hidden entirely. One agent's
+prompt fails to transfer outright, returning no content at all. We argue that portability validation
+must be per-agent and per-class, report response provenance next to every rate so a degraded server
+cannot be mistaken for a sceptical model, and quantify the $3.2\times$ deployment cost the larger
+backend carries for a different annotation distribution rather than a better one.
+\end{abstract}
+
+\begin{IEEEkeywords}
+multi-agent systems, vision--language models, prompt engineering, annotation pipelines, semantic
+segmentation, autonomous driving
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+Delegating judgement to a language model has become a standard component of data pipelines. The
+LLM-as-judge pattern~\cite{zheng2023judging} assigns a model a narrow evaluative role, constrains
+its output to a small vocabulary, and treats its verdict as a signal to be fused with others. Vision
+language models extend the pattern to image data~\cite{liu2024llava,wang2024qwen2vl}, which makes it
+attractive for annotation auditing: a mask proposal, a crop, a fixed question, a categorical answer.
+
+Systems built this way inherit an engineering convenience that is rarely examined. Because each
+agent is defined by a role and a prompt rather than by weights, the backend appears to be a
+swappable part: a practitioner who has validated a pipeline on one open model expects to move to a
+larger or cheaper one by changing a configuration entry, and per-model prompt tuning is in any case
+infeasible at annotation scale. The assumption behind this convenience is that a fixed prompt
+elicits comparable behaviour from comparable models, and that where it does not, the difference
+appears as a shift in selectivity that a single acceptance rate would reveal.
+
+We test that assumption in a system where it can be isolated: five agents assess Segment Anything
+Model (SAM)~\cite{kirillov2023sam} mask proposals on driving scenes, of which three are VLM agents
+with fixed prompts and two --- a segmentation quality agent and a deterministic geometric check ---
+are computed once and shared. Only the VLM agents change when the backend changes, so running two
+open-weight backends over the same 4{,}110 frames produces two annotation sets whose every
+difference traces to the VLM, and we verify the non-VLM inputs were bit-identical before comparing.
+
+Our contributions are as follows. We describe an annotation system whose agent roles, output
+contracts, and default-substitution policy are explicit enough that cross-backend differences can be
+attributed rather than merely observed. We report a controlled portability study over 90{,}176 mask
+proposals and 55{,}256 discovery candidates showing that fixed prompts transfer neither uniformly
+across agents nor uniformly across classes, and that a per-model aggregate rate --- the statistic
+such comparisons usually report --- would have scored the two backends as near-equivalent on the
+discovery agent while concealing a 41-point deficit on cyclists and pedestrians. We separate
+model-side from server-side non-answering, which we found necessary after a serving fault made a
+degraded backend look like a sceptical one, and we quantify the deployment cost of the larger model
+against the annotation distribution it actually produces.
+
+Whether any of these agents \emph{should} be deployed --- each signal scored against human verdicts,
+with downstream segmentation effect --- is a separate study~\cite{audit}; prompts and the complete
+result set are in an accompanying technical report~\cite{techreport}. Here the question is narrower
+and prior to both: given that such a system is built, what changes when its backend does?
+
+\section{Related Work}
+
+\textbf{Language models as delegated judges.} The LLM-as-judge
+paradigm~\cite{zheng2023judging,wu2023llmjudge} shows that language models can evaluate other
+systems' outputs given structured prompts and constrained formats, and it has been applied to data
+annotation directly~\cite{gilardi2023chatgptannotator,li2023llmannotator,li2023llmdata}. Agent
+frameworks compose several such roles into pipelines with explicit
+delegation~\cite{xi2023agents,schick2023toolformer,wang2023voyager}, an organising principle also
+used for embodied decision-making~\cite{ahn2022saycan,huang2023inner,brohan2023rt2}. This literature
+largely evaluates a composed system as a whole, on the assumption that a role specification is
+portable across the models that might fill it.
+
+\textbf{Prompt sensitivity and model substitution.} That assumption is weakly supported: prompt
+phrasing and format are known to move model behaviour substantially, and work on
+instruction form~\cite{wei2022chain} shows a small change in instruction changes what a model does,
+not merely how well it does it. What is missing is a controlled substitution study at deployment
+scale --- two backends, identical prompts, identical non-model inputs, resolved per agent and per
+class rather than at the level of a pipeline's aggregate output. Work on foundation-model capability
+surfaces~\cite{bommasani2021opportunities} anticipates that substitution is not neutral without
+measuring where the non-neutrality lands in a working system.
+
+\textbf{Annotation auditing over SAM proposals.} SAM~\cite{kirillov2023sam} produces class-agnostic
+masks without per-class prompts, which makes large-scale pseudo-annotation practical but leaves
+semantic correctness unverified. Filtering on confidence or cross-modal
+geometry~\cite{zou2019confidence,jaritz2020xmuda} cannot detect a plausibly-shaped mask carrying the
+wrong class, which motivates a semantic judge, and ensemble-style label-noise
+methods~\cite{malach2017decoupling,han2018co} motivate requiring agreement before acting on a
+rejection. Our system combines both; this paper asks what happens to it when the semantic judge is
+replaced.
+
+\begin{figure}[t]
+    \centering
+    \resizebox{\columnwidth}{!}{\input{diagrams/architecture_overview.tex}}
+    \caption{System architecture. \textbf{(1)} SAM (ViT-H) generates class-labeled masks from ZOD
+    frames using detection boxes as prompts. \textbf{(2)} CLFTv2-Large (SwinV2-L) is pre-trained on
+    2{,}319 curated clean frames and serves as the Quality Agent. \textbf{(3)} The Quality Agent
+    scores each mask and proposes discovery candidates; the VLM backend under test supplies the
+    semantic verdicts; a deterministic triage rule fuses all signals. \textbf{(4)} Refined
+    annotations train CLFTv2-Base. Only stage (3)'s VLM agents change between the two runs compared
+    in this paper; stages (1) and (2) are computed once and shared, which is what makes the
+    comparison attributable.}
+    \label{fig:architecture}
+\end{figure}
+
+\section{The Multi-Agent Annotation System}
+\label{sec:system}
+
+\subsection{Agent Roles and Output Contracts}
+
+Five agents assess each mask (Fig.~\ref{fig:architecture}, Fig.~\ref{fig:pipeline}). Each returns a
+categorical value from a closed vocabulary; no agent returns a score, and no learned weights combine
+them.
+
+\paragraph{Consistency Check (deterministic)} Runs first, before any model call. The fraction of
+mask pixels carrying projected LiDAR returns must exceed $\tau{=}0.1$. Detects leaks into sky and
+void at zero inference cost, and is identical across backends.
+
+\paragraph{Quality Agent (segmentation)} A Swin Transformer~\cite{liu2021swin} trained on the clean
+partition emits a per-pixel class map once per frame; per-mask agreement $\alpha$ is read from that
+shared map with no extra forward pass. Thresholds are class-specific,
+$\tau_q^{\text{large}}{=}0.30$ and $\tau_q^{\text{small}}{=}0.15$. Also identical across backends.
+
+\paragraph{BBox Agent (VLM)} Blind forced-choice classification over a fixed vocabulary of classes
+and distractors, on a tight RGB crop upscaled to at least $224{\times}224$~px. Returns
+\texttt{valid}, \texttt{background}, or \texttt{invalid}. The agent is not told the expected class,
+which removes agreement bias, and receives only RGB --- overlays and depth are withheld so it cannot
+classify context instead of the marked object. This is the agent issued once per mask, and it
+dominates cost.
+
+\paragraph{Correction Agent (VLM)} Invoked only on the refine path
+(\texttt{bbox=valid}, $\alpha{\geq}\tau_q$, \texttt{consistency=fail}). Returns \texttt{refine} or
+\texttt{no\_refine}. Unlike the others its prompt asks for a judgement about a hypothetical
+corrective action rather than a description of visible content.
+
+\paragraph{Failure-Mode Agent (VLM)} Classifies the dominant error type (\texttt{boundary\_drift},
+\texttt{hallucination}, \texttt{occlusion\_miss}, \texttt{fragmentation}). Diagnostic only; its
+output never reaches the triage rule.
+
+A separate discovery path compares the Quality Agent's class map to the SAM annotation at
+$384{\times}384$, forms connected components over pixels where the two disagree, and issues one
+class-specific VLM prompt per candidate: presence confirmation for vehicles and signs, and a
+three-way discrimination for human candidates, which must be resolved into cyclist or pedestrian.
+That asymmetry between the three discovery prompts is what Section~\ref{sec:results} finds to matter.
+
+\begin{figure}[t]
+    \centering
+    \input{diagrams/pipeline_end_to_end.tex}
+    \caption{Execution order and the paths a mask can take. Per-mask assessment runs the
+    deterministic consistency check, then the BBox Agent; the Correction Agent (grey, dashed) is
+    reached only on the refine path and the solid right-side arrow bypasses it otherwise. The
+    Failure-Mode Agent is diagnostic and does not affect outcomes. The discovery path (right) issues
+    one class-specific prompt per candidate region.}
+    \label{fig:pipeline}
+\end{figure}
+
+\subsection{Triage Rule and the Safe-Default Policy}
+
+Rejection is destructive, so the rule requires concordance. With
+$\mathcal{N}=\{\texttt{invalid},\texttt{bad},\texttt{fail}\}$ the negative signals, a mask is
+rejected on two or more signals in $\mathcal{N}$, with a \texttt{background} verdict counting as
+two; accepted on three positives; routed to refinement when it is valid and of good quality but
+fails consistency; and otherwise flagged for human review, so a single dissenting judge escalates a
+mask rather than deleting it. An \texttt{invalid} verdict paired with \texttt{quality=good} is
+downgraded to one negative signal, which protects small objects the VLM misreads.
+
+One implementation detail matters for every rate reported later. When a response cannot be parsed,
+the agent substitutes a \textsc{safe\_default}, which for the BBox agent is \texttt{valid}. This is
+the conservative choice for an annotation pipeline --- an unparseable reply must not delete a label
+--- but it makes a model's apparent permissiveness partly an artifact of its parse failure rate.
+Because every substituted verdict is \texttt{valid}, any run's valid rate is a weighted mean of its
+answered rate and 100\,\%, giving
+\begin{equation}
+\text{valid}_{\text{answered}} \;\leq\; \text{valid}_{\text{as-recorded}}
+\label{eq:default_bound}
+\end{equation}
+for \emph{any} run, whatever its default share. We use this bound below to establish a direction
+without needing the unrecoverable half of the measurement.
+
+\section{Comparison Protocol}
+\label{sec:protocol}
+
+Two open-weight backends are served via Ollama on a single A100-80GB: LLaVA-1.6-34B~\cite{liu2024llava}
+and Qwen2.5-VL-72B~\cite{bai2025qwen25vl}. Prompts are byte-identical across the two, with no
+per-model calibration, so what is measured is portability of a fixed prompt set rather than either
+model's ceiling. Three controls make the comparison attributable.
+
+\textbf{Identical inputs, verified.} All figures are computed on the 4{,}110 frames and 90{,}176
+masks both runs completed. The comparison is paired at mask level, and we verify that the two runs
+saw the same mask identifiers, bit-identical Swin agreement and LiDAR support values, and the same
+number of proposed discovery candidates per frame. Triage outcomes are recomputed offline under one
+rule for both runs, so a rule revision between campaigns cannot masquerade as a model difference.
+
+\textbf{Verdicts reported as-recorded, with provenance.} BBox rates include masks whose verdict is a
+\textsc{safe\_default} substitution, because that is the verdict the pipeline acted on and wrote into
+the annotations. For Qwen we additionally report the default share and the rate over answered masks.
+The equivalent decomposition is not available for LLaVA: that run predates the per-agent parse
+telemetry and stored only the parsed verdict, so its defaulted masks cannot be distinguished offline
+from confidently valid ones. Inequality~\eqref{eq:default_bound} is what lets us state a direction
+regardless.
+
+\textbf{Response provenance separated from model judgement.} Both runs store each discovery response
+verbatim, so we re-derive the outcome for both with a single parser and separate four cases that a
+boolean \texttt{confirmed} flag collapses into one: the model named a class the prompt offered, the
+model declined (\texttt{other}, a genuine negative), the model replied outside the offered
+vocabulary, or no content was returned at all. Confirmation rates are then taken over answered
+candidates only. This separation was not an aesthetic choice. An earlier campaign reported a
+strikingly sceptical discovery profile for the larger model which, on inspection, was a degraded
+server returning empty replies that the parser folded into declines. Pooling those cases is what made
+a serving fault look like a behavioural trait, and we now report the provenance decomposition next to
+every rate.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{What the Agents Actually Decide}
+
+Fig.~\ref{fig:qualitative} shows the five decision paths the architecture produces, with the agent
+outputs behind each. \textbf{(a) Hallucination:} SAM proposes a mask where the object is not
+present and the BBox agent returns \texttt{background} --- a \texttt{vehicle} inside a dense hedge,
+and a \texttt{sign} on a gantry's bare support lattice with the real panel a few pixels outside the
+mask. Both are rejected correctly. \textbf{(b) Consistency failure:} the mask covers a parked
+bicycle, BBox returns \texttt{valid} and Swin agrees (\texttt{good}, 82\,\%), but only 9.1\,\% of
+the mask carries a LiDAR return, below $\tau{=}0.1$: a thin frame reflects few beams, and most pass
+through and return from the wall behind. \textbf{(c) Depth-support rejection:} a pedestrian-shaped
+statue draws \texttt{valid} from the VLM, while Swin sees no person (0\,\% agreement) and LiDAR
+support is 8.4\,\% --- two negatives against one positive, the concordance rule catching an error a
+single judge would have missed. \textbf{(d) Agent disagreement:} three road signs merged into one
+mask draw \texttt{invalid} from BBox but \texttt{good} from Swin, so the downgrade rule escalates to
+a human rather than deleting real sign pixels. \textbf{(e) Discovery:} SAM missed a cyclist and a
+pedestrian entirely; both are recovered where Swin's dense prediction disagrees with SAM, and the
+VLM confirms the class of each resulting component.
+
+These are the paths both backends share by construction. What the rest of this section measures is
+that running the same prompts through a different backend does not preserve which path a given mask
+takes.
+
+\begin{figure*}[t]
+    \centering
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_hallucination.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_hallucination3.png}
+        \caption{Hallucination}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_boundary.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_boundary_lidar.png}
+        \caption{Consistency fail}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_depth.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_depth2.png}
+        \caption{Depth-support}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_review.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_review2.png}
+        \caption{Disagreement}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_discovery.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_discovery2.png}
+        \caption{Discovery}
+    \end{subfigure}
+    \caption{The five decision paths of the multi-agent system, LLaVA-1.6-34B. Red overlay in
+    (a)--(d) is the SAM mask under review; (b), bottom, shows LiDAR returns with the mask outline.
+    Cyan overlay in (e) is Swin's per-pixel prediction seeding the discovery candidate, with the
+    orange box marking the region the VLM confirmed. Agent outputs for every case are in the text.}
+    \label{fig:qualitative}
+\end{figure*}
+
+\input{tables/agent_behavior}
+
+\subsection{The Two Backends Disagree on Four Crops in Ten}
+
+Table~\ref{tab:agent_behavior} gives the per-agent comparison. The headline is negative for
+portability: under identical prompts the two backends return the same BBox verdict on only 57.0\,\%
+of masks. Whatever a fixed prompt is transferring, it is not a shared decision boundary.
+
+Qwen is the more permissive mask judge. It returns \texttt{valid} on 70.9\,\% of crops against
+LLaVA's 62.1\,\% as-recorded, and since Qwen's answered-only rate of 67.2\,\% already exceeds
+LLaVA's as-recorded rate, inequality~\eqref{eq:default_bound} places the gap on answered masks at
+\emph{at least} 5.1 points in that direction. LLaVA's unmeasured defaults can only widen it, so the
+direction holds without re-running the model and only the magnitude remains a lower bound.
+
+The more consequential finding is that this is not a uniform relaxation. Relative to LLaVA, Qwen
+rejects far fewer signs (10.8\,\% vs.\ 26.0\,\%) and cyclists (33.3\,\% vs.\ 46.5\,\%), yet
+substantially \emph{more} vehicles (16.3\,\% vs.\ 5.1\,\%) and pedestrians (35.4\,\% vs.\ 16.9\,\%).
+The verdict profile is redistributed across classes rather than shifted along a single
+permissiveness axis, so neither model is uniformly more selective and a single aggregate acceptance
+rate does not predict which classes a backend will protect. For a safety-critical annotation task
+this is the difference that matters: substituting the backend changes \emph{which} classes lose
+labels, and does so in a direction that the aggregate conceals.
+
+\input{tables/agent_performance}
+
+Table~\ref{tab:agent_performance} scores each backend against the Quality Agent's verdict, which is
+a noisy reference rather than ground truth but is identical for both runs and therefore ranks them
+on one fixed yardstick. LLaVA is the balanced judge (precision 72.0, recall 71.1, F1 71.5) and Qwen
+the higher-recall, lower-precision one (69.0, 77.8, F1 73.1), consistent with its verdict
+distribution. Restricting Qwen to answered masks raises precision to 75.6 and accuracy to 67.5,
+which quantifies how much of its apparent permissiveness was the default substitution rather than
+the model, and is exactly the correction that becomes impossible when provenance is not stored.
+
+\subsection{Portability Fails Per-Agent, Not Per-Model}
+
+The three discovery prompts separate the finding sharply. Given the same 55{,}256 candidates, the
+two backends confirm at nearly the same rate over answered candidates --- 82.4\,\% for Qwen against
+83.9\,\% for LLaVA --- and Qwen is in fact marginally \emph{more} permissive on the vehicle prompt
+(87.6\,\% vs.\ 83.0\,\%) and the sign prompt (89.3\,\% vs.\ 84.2\,\%). A study reporting one
+confirmation rate per model would stop here and record the two as near-equivalent on this agent.
+
+The entire divergence sits in the third prompt. Where a human candidate must be disambiguated into
+cyclist or pedestrian, Qwen confirms 45.3\,\% of candidates against LLaVA's 85.9\,\%, yielding
+3{,}506 human objects against 6{,}376 from an identical candidate stream. That is a 41-point deficit
+concentrated on the two classes the pipeline can least afford to lose, produced by the only prompt of
+the three carrying a three-way discrimination rather than a presence check. The failure is a property
+of the \emph{task the prompt encodes}, not of the model's competence in aggregate --- the same
+backend is more permissive than its counterpart on both of the presence-check prompts.
+
+The Correction Agent fails more starkly still, and in the third possible way. Its prompt is the only
+one asking for a judgement about a hypothetical corrective action rather than a description of
+visible content, and under Qwen it elicits no usable content at all: every call falls back to
+\texttt{no\_refine} and the refine path never fires, against 1.4\,\% of masks routed to refinement
+under LLaVA (Table~\ref{tab:agent_behavior}). We report this as a null result and make no refine-path
+claim for Qwen. The explanation we can offer --- that a counterfactual instruction transfers worse
+than a descriptive one --- is plausible and untested.
+\TODO{regenerate the exact Correction-Agent call and response counts on the 4{,}110-frame set; the
+1{,}449/1{,}311 figures in the superseded draft were computed on the old 3{,}535-frame subset.}
+
+Taken together the three agents fail in three different modes under one prompt set: the BBox agent
+transfers with a class-redistributed boundary, the discovery agent transfers on two prompts and
+collapses on the third, and the Correction agent does not transfer at all. No per-model summary
+statistic distinguishes these cases, which is our central practical claim: portability must be
+validated per agent and per class, on the same inputs, or it is not validated.
+
+\input{tables/timing}
+
+\subsection{What the Larger Backend Costs, and What It Buys}
+
+Table~\ref{tab:timing} reports deployment cost. The BBox agent dominates, at 3.54\,s per call for
+LLaVA against 11.39\,s for Qwen, issued once per mask, so per-mask latency scales roughly with model
+size. Annotating the 4{,}110 frames took 132.3 GPU-hours with LLaVA against 426.9 with Qwen, a
+$3.2\times$ increase, or 33.1 against 106.7 wall-clock hours at four concurrent frame workers. The
+Qwen figure is a deployed rather than a fault-free cost: it includes retry and reload traffic from
+the monitor-triggered restarts described in Section~\ref{sec:protocol}. Estimated VRAM is
+$\sim$22\,GB against $\sim$51\,GB, both within a single A100-80GB.
+
+Against that premium, the larger backend's verdicts are less selective rather than more, its
+discovery confirmation rate is marginally lower in aggregate while differing by 41 points on one
+prompt, and one of its three agent prompts does not function. The $3.2\times$ cost buys a different
+annotation distribution, not a better one on any axis measured here. Whether either backend's triage
+is worth its cost against a human reference is the question of~\cite{audit}; the narrower point
+available from this comparison alone is that the cost does not purchase portability.
+
+\subsection{Two Weaknesses of the Rule Itself}
+
+Inspecting individual triage paths exposed two failure modes that belong to the rule rather than to
+either backend, both visible in Fig.~\ref{fig:limitations}. First, a \texttt{background} verdict
+counts as two negatives and therefore rejects unilaterally, with no escalation path, so a single VLM
+misreading of a dark or motion-blurred crop is sufficient to discard a valid label --- we observe
+this on a legible night road sign whose independent Swin score was well above threshold
+(Fig.~\ref{fig:limitations}b, 0.605 agreement), and on a bus large enough to fill much of the crop
+(Fig.~\ref{fig:limitations}a). Second, the rule assumes the three signals fail independently, and
+for sparse or dot-matrix objects they do not: an LED matrix sign
+(Fig.~\ref{fig:limitations}c) and a near-field pedestrian (Fig.~\ref{fig:limitations}d) each drive
+Swin agreement and LiDAR support to near zero at once through one shared physical cause, a low
+solid-surface fraction, defeating a two-of-three concordance requirement rather than being caught by
+it --- and in both cases the BBox agent had judged the object \texttt{valid}. Both are correctable
+--- exempting \texttt{background} from unilateral rejection when Swin agreement is high, and making
+the LiDAR threshold class-aware --- and~\cite{audit} evaluates the repair against human verdicts.
+
+\begin{figure}[t]
+    \centering
+    \begin{subfigure}[b]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/limit_bus.png}
+        \caption{Bus $\to$ \texttt{background}}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/limit_signnight.png}
+        \caption{Night sign $\to$ \texttt{background}}
+    \end{subfigure}
+
+    \vspace{4pt}
+    \begin{subfigure}[b]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/limit_ledsign.png}
+        \caption{LED sign: Swin \& LiDAR both fail}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/limit_pedestrian.png}
+        \caption{Near-field pedestrian: same}
+    \end{subfigure}
+    \caption{The two structural weaknesses of the triage rule, which are properties of the rule and
+    not of either backend. (a)--(b): real objects rejected outright on a single \texttt{background}
+    verdict, with no corroboration required and no escalation path. (c)--(d): real, VLM-confirmed
+    (\texttt{valid}) objects whose sparse or dot-matrix material drives the Swin quality score and
+    the LiDAR consistency check to near zero simultaneously, so one shared physical cause defeats a
+    rule that assumes the two signals fail independently.}
+    \label{fig:limitations}
+\end{figure}
+
+\section{Conclusion}
+
+We treated the VLM backend of a multi-agent annotation system as the experimental variable, holding
+prompts and every non-model input fixed across 4{,}110 frames and 90{,}176 mask proposals. Fixed
+prompts do not transfer between open backends, and the failure is neither uniform nor summarisable
+per model. The two backends agree on 57.0\,\% of mask verdicts; one redistributes its rejections
+across classes rather than shifting selectivity, protecting signs and cyclists while rejecting more
+vehicles and pedestrians; the discovery agent transfers on both presence-check prompts and collapses
+by 41 points on the one prompt requiring a three-way discrimination, precisely on the safety-critical
+classes; and the Correction Agent's counterfactual prompt does not transfer at all. A single
+acceptance rate per model, the statistic such comparisons usually report, would have registered the
+discovery agent as portable.
+
+Two practices follow for anyone building this way. Validate portability per agent and per class on
+identical inputs, since a pipeline-level output comparison cannot localise a failure and an aggregate
+rate can hide a reversal. And record response provenance alongside every verdict --- whether a value
+was answered, declined, unparseable, or empty --- because a safe-default policy silently converts
+serving faults into apparent model behaviour, which in our case produced a plausible and entirely
+spurious account of a model's character until the raw responses were re-parsed. The $3.2\times$
+inference premium of the larger backend bought a different annotation distribution rather than a
+better one, and it did not buy portability.
+
+\section*{Acknowledgement}
+Funded by the European Union's Horizon 2020 Programme under grant No.~856602 (Finest Twins) and
+Horizon Europe under grant No.~101135988 (PLIADES).
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

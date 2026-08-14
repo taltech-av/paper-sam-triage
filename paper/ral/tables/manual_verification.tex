@@ -1,0 +1,70 @@
+% Region counts are the sizes of the labelling job as built (make_label_bundle.py,
+% 2026-08-10) and are final. The judged columns are the closed verification pass
+% at 1,001 frames; regenerate with
+%   python analyze_human_verification.py --export human_verified_output/verify_export.csv
+\begin{table}[t]
+\centering
+\caption{Manual verification of the flagged partition: a single \texttt{mask\_toggle} job over all
+         4{,}110 frames in which every SAM proposal and every Swin discovery candidate is shown
+         together and the labeller marks the errors, never told which model produced which region.
+         \emph{Incorrect} is the share a human rejected. Discovery candidates are split by
+         \emph{kind}: \emph{standalone} candidates are regions SAM missed entirely, where precision
+         measures what discovery recovers, and \emph{fringe} candidates are the rim left around an
+         object SAM already covered, where it measures boundary completion. A pooled number is
+         dominated by fringes and would read as a recall gain. \emph{Regions} is the job as built;
+         \emph{judged} is the closed pass, a \humansample\ sample whose representativeness is
+         established in Section~\ref{sec:human_verification}.}
+\label{tab:manual_verification}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{Source} & \textbf{Kind} & \textbf{Regions} & \textbf{Judged} & \textbf{Incorrect} & \textbf{Incorrect \%} \\
+\midrule
+SAM proposals            & ---        & 90{,}176  & 22{,}289 & 4{,}551  & 20.4 \\
+Discovery candidates     & standalone & 16{,}402  & 4{,}043  & 2{,}938  & 72.7 \\
+Discovery candidates     & fringe     & 38{,}850  & 9{,}652  & 6{,}269  & 65.0 \\
+\midrule
+\textbf{Total}           &            & \textbf{145{,}428} & \textbf{35{,}984} & \textbf{13{,}758} & \textbf{38.2} \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+% ---------------------------------------------------------------------------
+
+\begin{table*}[t]
+\centering
+\caption{Agreement of each automated decision with the human verdict. Every mask carries every
+         run's decision, so one human pass scores all sources. A \emph{false accept} is a mask the
+         pipeline kept that the human rejected, the error that puts wrong pixels into a training
+         label; a \emph{false reject} is a mask it deleted that the human kept, which only leaves
+         those pixels unlabelled. The two costs are not symmetric and are reported separately rather
+         than as one accuracy: F1 pools them, and with only 20.4\,\% of proposals actually wrong it
+         rewards the rule that keeps everything, which is why the F1 column ranks these rules in the
+         opposite order to the downstream mIoU of Table~\ref{tab:ablation}. Swin-only and the
+         deterministic LiDAR check use no VLM and are included as the cost benchmark the VLM stage
+         must beat. Intervals resample frames, not masks, since masks in one frame share a scene and
+         a labeller's calibration.}
+\label{tab:human_agreement}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+\textbf{Decision source} & \textbf{Masks judged} & \textbf{False accept \%} & \textbf{False reject \%}
+  & \textbf{Precision} & \textbf{Recall} & \textbf{F1 [95\,\% CI]} \\
+\midrule
+\multicolumn{7}{l}{\textit{Mask triage: keep or delete a SAM proposal}} \\
+Keep every proposal (no triage) & 22{,}289 & 100.0 & 0.0  & 79.6 & 100.0 & 88.6 [88.0, 89.2] \\
+Swin only (no VLM)              & 22{,}289 & 23.5  & 26.7 & 92.4 & 73.3  & 81.7 [81.1, 82.3] \\
+LiDAR consistency (no VLM)      & 22{,}289 & 93.6  & 5.0  & 79.8 & 95.0  & 86.8 [86.1, 87.4] \\
+LLaVA-1.6-34B triage            & 22{,}289 & 54.9  & 14.1 & 85.9 & 85.9  & 85.9 [85.4, 86.4] \\
+Qwen2.5-VL-72B triage           & 22{,}289 & 59.5  & 11.4 & 85.3 & 88.6  & 86.9 [86.3, 87.5] \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Discovery confirmation: standalone candidates only}} \\
+LLaVA-1.6-34B                 & 4{,}043 & 67.6 & 31.6 & 27.6 & 68.4 & 39.3 [36.6, 42.0] \\
+Qwen2.5-VL-72B                & 4{,}043 & 72.3 & 22.4 & 28.8 & 77.6 & 42.0 [39.2, 44.8] \\
+\addlinespace
+\multicolumn{7}{l}{\textit{Discovery confirmation: fringe candidates}} \\
+LLaVA-1.6-34B                 & 9{,}652 & 88.7 & 13.2 & 34.6 & 86.8 & 49.4 [47.5, 51.3] \\
+Qwen2.5-VL-72B                & 9{,}652 & 87.5 & 15.8 & 34.2 & 84.2 & 48.6 [46.7, 50.4] \\
+\bottomrule
+\end{tabular}}
+\end{table*}

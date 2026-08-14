@@ -1,0 +1,44 @@
+% Candidate columns from analyze_human_verification.py --only geometry; pixel
+% columns from discovery_pixel_budget.py, which re-derives what each candidate
+% actually painted into the training label (384px component map upsampled
+% NEAREST, claiming only pixels triage left as background — the same operation
+% replay_triage._add_discoveries performs). Reproduction agrees with the shipped
+% annotation to 108 px/frame against ~10,800 px/frame added.
+%
+% The class test folds cyclist and pedestrian into `human` before comparing,
+% because SAM proposals carry ZOD's four classes and discovery candidates carry
+% Swin's three. Compared unfolded, every human-class candidate reads as abutting
+% nothing.
+\begin{table}[t]
+\centering
+\caption{What each discovery candidate was lying against, joined to the human verdict on it.
+         A candidate is \emph{same-class} when the ring of SAM pixels around it contains a mask of
+         its own class, which separates the two things the stage can be doing: editing the boundary
+         of an object the pipeline already has, or proposing one it does not. Because candidates are
+         SAM-subtracted before components are formed, a rim never overlaps the mask it surrounds, so
+         a rejected rim is not a harmless duplicate but paint applied beside a correct object.
+         Shares are of the 13{,}695 answered candidates and of the 10.7\,M pixels they painted; the
+         two differ because outcomes differ in mean region size, and the pixel share is the one the
+         downstream loss responds to. ``Final 200'' is the candidate share over the last 200 frames,
+         the calibration in force at the end of a non-stationary pass
+         (Section~\ref{sec:human_verification}).}
+\label{tab:discovery_geometry}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{Outcome} & \textbf{Geometry / verdict} & \textbf{n} & \textbf{\% cand.} & \textbf{\% px} & \textbf{Final 200} \\
+\midrule
+Edge bleed      & same-class, rejected & 7{,}123 & 52.0 & 47.5 & 64.0 \\
+Boundary growth & same-class, kept     & 3{,}647 & 26.6 & 29.0 & 13.1 \\
+False alarm     & no same-class, rejected & 2{,}084 & 15.2 & 14.2 & 21.1 \\
+New object      & no same-class, kept  &    841 &  6.1 &  9.3 &  1.8 \\
+\midrule
+\multicolumn{6}{l}{\textit{Per class: share of that class's added pixels}} \\
+\textbf{Class} & \textbf{Added px} & \textbf{Bleed} & \textbf{Growth} & \textbf{Alarm} & \textbf{New} \\
+\midrule
+Vehicle & 5{,}504{,}600 & 41.3 & 42.5 &  8.1 &  8.1 \\
+Sign    & 3{,}549{,}203 & 54.3 & 14.6 & 19.5 & 11.7 \\
+Human   & 1{,}621{,}625 & 53.7 & 14.4 & 23.5 &  8.4 \\
+\bottomrule
+\end{tabular}}
+\end{table}

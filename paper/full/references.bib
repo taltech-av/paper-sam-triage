@@ -312,3 +312,38 @@
   booktitle={Advances in Neural Information Processing Systems},
   year={2023}
 }
+% --- Cross-references between the two papers of this split ---------------------
+% \cite{companion} is used by paper/ral/  -> the ICAART system + portability paper
+% \cite{audit}     is used by paper/icaart/ -> the RA-L human-referenced audit
+% Both are placeholders until the venues/arXiv IDs are known. Fill before submission.
+@misc{companion,
+  author = {Toomas Tahves and Mauro Bellone and Raivo Sell},
+  title  = {Fixed Prompts Do Not Transfer: A Controlled Comparison of Open
+            Vision--Language Models as Annotation Agents},
+  year   = {2026},
+  note   = {Under review}
+}
+
+% The arXiv technical report carrying the SHARED substrate both papers rest on:
+% dataset construction, full agent specification, the human verification protocol,
+% and the complete result set. Both peer-reviewed papers cite it for anything they
+% would otherwise have to re-derive, which is what keeps their method sections short
+% and non-overlapping. IEEE and SCITEPRESS both permit arXiv preprints.
+@misc{techreport,
+  author       = {Toomas Tahves and Mauro Bellone and Raivo Sell},
+  title        = {Multi-Agent Refinement of {SAM} Pseudo-Labels for Autonomous
+                  Driving: System, Human Reference, and Complete Results},
+  year         = {2026},
+  eprint       = {TODO.TODO},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.CV},
+  note         = {Technical report}
+}
+
+@misc{audit,
+  author = {Toomas Tahves and Mauro Bellone and Raivo Sell},
+  title  = {Label Purity, Not Verification: A Human-Referenced Audit of SAM
+            Pseudo-Label Refinement for Driving Segmentation},
+  year   = {2026},
+  note   = {Under review}
+}

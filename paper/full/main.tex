@@ -2,7 +2,6 @@
 \pdfminorversion=4
 \IEEEoverridecommandlockouts
 
-% Packages
 \usepackage{cite}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{graphicx}
@@ -17,7 +16,7 @@
 \usepackage{orcidlink}
 \usepackage{dblfloatfix}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning, shapes, backgrounds}
+\usetikzlibrary{arrows.meta, positioning, shapes, backgrounds, calc, decorations.pathreplacing}
 \usepackage{pgfplots}
 
 \makeatletter
@@ -28,29 +27,10 @@
 }
 \makeatother
 
-% --- Result status ----------------------------------------------------------
-% The human verification pass is closed at \humancoverage. It is a sample of the
-% flagged partition, not a census of it, and Section~\ref{sec:human_verification}
-% establishes that it is not distinguishable from a random draw of the same size.
-% Every verification figure in the paper is final at that coverage.
-%
-% \pending{} marks a downstream number that a scheduled training run will supply;
-% it renders blue so an empty cell cannot be mistaken for a measured zero. When
-% the runs land and the tables are filled, blanking the definition turns the
-% paper black in one edit:
-%   \renewcommand{\pending}[1]{#1}   \renewcommand{\pendingnote}{}
-% \TODO marks work that must be resolved before submission and should render
-% nothing by then, because nothing should be left.
 \newcommand{\humancoverage}{1{,}001 of 4{,}110 frames (24.4\,\%), 35{,}984 regions}
 \newcommand{\humansample}{24.4\,\%}
 \newcommand{\pending}[1]{\textcolor{blue}{#1}}
-\newcommand{\pendingnote}{\textcolor{blue}{\emph{Pending: the checkpoints for this table are
-  scheduled; every cell is filled from them and none is reported here in advance.}}}
 \newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
-% Retitled from "Deterministic Swin-Guided Multi-Signal Triage for Refining SAM
-% Pseudo-Labels": the results do not support selling the pipeline, they audit it,
-% and a title that promises a method invites reviewers to read the findings as a
-% failure to deliver one rather than as the contribution.
 \title{Empirical Evaluation of VLM and Deterministic Triage Methods for SAM Pseudo-Label Generation}
 
 \author{\small Toomas Tahves$^{1}$, Mauro Bellone$^{2,3}$, Raivo Sell$^{1}$ \\
@@ -77,15 +57,12 @@ First, mask verification cannot improve a pseudo-label set for free: because the
 Rule engineering within a fixed signal set moves this operating point very little; the operating point depends far more on which signals are consulted and how their disagreement is resolved.
 Second, the criterion matters more than the rule: because a retained wrong mask injects wrong pixels while a deleted correct mask only omits them, pooled metrics such as F1 rank these rules in the opposite order to their downstream effect, rewarding whichever rule keeps the most labels.
 Scored on the two error directions separately, a free deterministic segmentation signal dominates zero-shot VLM triage on the direction that matters, at a fraction of the cost.
-Third, neither half of the pipeline earns its inference budget: removing masks is bounded by how few are wrong, and confirming candidate objects the proposal stage never generated adds only a few points of precision on genuinely missed objects while carrying no information at all on the boundary fringes that dominate the candidate pool. Downstream, the free deterministic quality signal is worth $+3.9$ mIoU over unfiltered SAM labels while object discovery costs $9.4$, and human deletion of 5.3\,\% of the object pixels --- at fixed training-set size --- is worth $+2.5$, so label purity rather than label volume is what binds.
+Third, neither half of the pipeline earns its inference budget: removing masks is bounded by how few are wrong, and confirming candidate objects the proposal stage never generated adds only a few points of precision on genuinely missed objects while carrying no information at all on the boundary fringes that dominate the candidate pool. Downstream, the free deterministic quality signal is worth $+3.9$ mIoU over unfiltered SAM labels, while adding either VLM backend on top of it gives back $-3.0$ and $-2.7$ of that and object discovery costs $9.4$; human deletion of 5.3\,\% of the object pixels --- at fixed training-set size --- is worth $+2.5$, so label purity rather than label volume is what binds.
 Joining each discovery candidate's geometry to the human verdict on it explains what the aggregate hides: four fifths of what the stage proposes is the rim of an object the pipeline had already segmented rather than a new object, and two thirds of those rims are wrong. In pixels, 61.7\,\% of what discovery adds is material a human rejected, amounting to 23.1\,\% of the object pixels in the labels it produces. The stage is a boundary editor sold as an object finder, and the property that separates its output is geometric --- decidable without a model call or a human label.
 Fourth, cross-model agreement is not a proxy for accuracy: the ranking of the two VLMs inverts when they are scored against human verdicts instead of against each other, the aggregate ordering is set by the class composition of the corpus rather than by competence, and prompt portability fails per-prompt rather than uniformly.
 We close with the cost accounting the human reference makes possible: at this model scale, verifying a frame with a VLM consumes several times more machine time than a human needs to verify the same frame by hand, which reframes where verification effort should be spent.
 All decisions trace to explicit agent outputs with no learned fusion weights, so every variant is reproducible from stored responses without re-running VLM inference.
 \end{abstract}
-
-
-
 
 \begin{IEEEkeywords}
 autonomous driving, semantic segmentation, semi-supervised learning, pseudo-label refinement, multi-agent systems, vision–language models, Swin Transformer, CLFTv2, multi-modal fusion, annotation quality, Segment Anything Model
@@ -118,10 +95,6 @@ Our contributions are:
     \item and \textbf{a cost accounting against human effort}, which the human reference makes possible: we compare per-frame VLM inference time against the time a human takes to verify the same frame, and quantify how much of the annotation error a ranked review queue reaches for a given verification budget.
 \end{itemize}
 
-
-
-
-
 \section{Related Work}
 \label{sec:related_work}
 
@@ -152,8 +125,6 @@ A complementary line of work studies ensemble and multi-signal filtering for lab
 Requiring agreement between independent classifiers before rejecting a sample reduces the risk that any single erroneous judge silently discards valid training examples. 
 This principle motivates our concordance-based triage rule: rejection requires at least two negative signals among Swin agreement, VLM verdict, and LiDAR consistency, so that disagreement escalates the mask rather than deleting it. 
 Prior work has not applied such concordance-based filtering to SAM mask validation over camera--LiDAR inputs, nor compared pixel-level segmentation and zero-shot VLM signals as independent quality judges within a unified annotation pipeline.
-
-
 
 \begin{figure}[t]
     \centering
@@ -403,7 +374,6 @@ Separating them also distinguishes model-side non-answering (out-of-vocabulary t
 One limitation remains: 25 of the 4{,}135 flagged frames could not be annotated cleanly and are excluded, leaving 4{,}110. The excluded set is not distinguishable from a random draw of the same size by mask count (permutation test, $p{=}0.30$), so the exclusion is not expected to bias the comparison.
 The rates below are therefore provisional, and the downstream results in Table~\ref{tab:ablation} that depend on Qwen annotations predate the re-run entirely (see Section~\ref{sec:experiments}).
 
-
 \subsection{Human Verification Results}
 \label{sec:human_results}
 
@@ -502,23 +472,20 @@ frames and the automated variants 4{,}110, so a human row inside it would confou
 annotation volume. That question gets its own controlled experiment (Table~\ref{tab:cleaning}), in which
 both arms train on the same 651 frames and differ in exactly one field: whether the masks the human
 rejected are erased or kept.
-A third group holds the labels fixed and varies the input modality (Table~\ref{tab:modality_ablation});
-it is the one comparison in which scoring against the shared training labels carries no bias, since all
-three arms were trained on them.
-One caveat is inherent to the first two groups: the reference is the same annotator's work that the
+One caveat is inherent to both groups: the reference is the same annotator's work that the
 clean arm was trained on. Test frames are held out from every arm, so no model has seen its own test
 labels, but the honest reading of a gap is that a model agrees more closely with a human, not that it
 is closer to a neutral ground truth.
 
 Table~\ref{tab:ablation} reports vehicle, sign, and combined human-class IoU (cyclist + pedestrian) for
-every step of the ladder. The three VLM-independent rows are final; the four VLM rows are supplied by
-runs still in progress and are marked \pending{pending} rather than filled from the earlier training
+every step of the ladder. The three VLM-independent rows and both triage rows are final; the two
+full-pipeline rows are supplied by runs still in progress and are marked \pending{pending} rather
+than filled from the earlier training
 campaign, whose checkpoints were trained on pre-correction annotations and scored against a
 SAM-derived reference and so answer neither the question this table asks nor against the reference it
 uses. They are not reported here in any form.
-\TODO{fill the four VLM rows of Tables~\ref{tab:ablation} and~\ref{tab:weather_miou} and all of
-Table~\ref{tab:modality_ablation} when those runs land, then blank \texttt{\textbackslash pending} and
-\texttt{\textbackslash pendingnote} in the preamble.}
+\TODO{fill the two \emph{Triage + disc.} rows of Tables~\ref{tab:ablation} and~\ref{tab:weather_miou}
+when those runs land, then blank \texttt{\textbackslash pending} in the preamble.}
 
 \textbf{The free deterministic signal is the only filtering stage that helps, and the margin is large.}
 The ladder is nested, so each step adds exactly one pipeline stage and any change is attributable to
@@ -529,14 +496,24 @@ largest on signs ($+6.8$ IoU) and smallest on vehicles ($+2.1$), matching where 
 worst relative to their pixel volume. One forward pass per frame, at $<$0.01\,s per mask
 (Table~\ref{tab:timing}), buys the entire measurable filtering effect in this study.
 
-\textbf{Does VLM triage add anything over Swin alone?}
-The mask-level evidence of Section~\ref{sec:human_results} predicts the answer and the ladder tests it:
-crop-based VLM rejection retains more than half of the masks a human rejected, against under a quarter
-for the free Swin threshold, so the VLM stage should not improve a training label unless deleting
-correct masks costs more downstream than keeping wrong ones. The VLM rows are pending, so we state the
-prediction and the standard it will be judged against rather than the result: the Swin-only row is the
-reference column, and a triage stage that costs 110.6--362.7\,s of GPU time per frame has to beat 44.2
-mIoU to have earned it.
+\textbf{Does VLM triage add anything over Swin alone? No --- it subtracts.}
+The mask-level evidence of Section~\ref{sec:human_results} predicted the answer and the ladder now
+tests it. Crop-based VLM rejection retains more than half of the masks a human rejected, against under
+a quarter for the free Swin threshold, so the VLM stage should not improve a training label unless
+deleting correct masks costs less downstream than keeping wrong ones. It does not. Both triage
+variants land significantly below the free signal they are layered on: 41.1 mIoU with LLaVA-1.6-34B
+($-3.0$ against Swin only, CI $[-4.5, -1.6]$, $P(\Delta\geq0)<10^{-4}$) and 41.5 with Qwen2.5-VL-72B
+($-2.7$, CI $[-4.1, -1.5]$, $P(\Delta\geq0)<10^{-4}$) --- about three quarters of the $+3.9$ the Swin
+threshold had bought, given back. Neither is distinguishable from doing nothing at all: against
+unfiltered raw SAM they are $+0.8$ (CI $[-1.0, +2.6]$) and $+1.2$ (CI $[-0.8, +2.9]$), both intervals
+containing zero. Nor are the two backends distinguishable from each other (paired difference CI
+$[-0.9, +1.4]$), despite the $3.2\times$ difference in inference cost between them: the backend
+insensitivity found at verdict level survives into the trained model.
+The loss is broad but heaviest where triage deletes most --- sign IoU falls from 37.8 to 35.4 (LLaVA)
+and 33.3 (Qwen), against 69.6 $\to$ 67.5 and 68.5 on vehicles --- and heaviest in the degraded weather
+strata (Table~\ref{tab:weather_miou}), where both triage variants fall \emph{below} unfiltered raw SAM
+in night-rain (33.1 and 34.4 against 36.4). A triage stage that costs 109--352\,s of GPU time per
+frame had to beat 44.2 mIoU to have earned it; it does not reliably beat 40.3.
 
 \textbf{Discovery is strongly negative, and the human pass had already bounded it.}
 Adding all Swin-detected discoveries to the Swin-filtered labels costs $-9.4$ mIoU
@@ -559,8 +536,11 @@ bounding boxes.
 \textbf{The stage is a boundary editor that occasionally finds an object, not an object finder.}
 An aggregate precision does not say what a wrong candidate \emph{was}, and the two possibilities carry
 opposite implications. We therefore join every candidate's geometry to the human verdict on it
-(Table~\ref{tab:discovery_geometry}), asking whether the ring of SAM pixels around it contains a mask
-of the candidate's own class.
+(Fig.~\ref{fig:candidate_geometry}, Table~\ref{tab:discovery_geometry}), asking whether the ring of
+SAM pixels around it contains a mask of the candidate's own class. Which column of
+Fig.~\ref{fig:candidate_geometry} a candidate falls in is decidable from geometry alone, before any
+model call and without a human label --- a property Section~\ref{sec:practice} turns into the one
+actionable fix this study produces.
 Four out of five candidates (78.6\,\%) are rims on an object the pipeline had already segmented, and
 two thirds of those rims the human rejected: 52.0\,\% of all candidates are \emph{edge bleed}, a rim
 on a same-class mask judged not to be the object. Only 6.1\,\% are objects SAM missed entirely and a
@@ -570,6 +550,50 @@ predominantly boundary editing, and predominantly wrong when it edits.
 The mechanism is visible in the per-class split: vehicles, which SAM finds reliably, yield the most
 boundary growth --- 39.3\,\% of their candidates and 42.5\,\% of their added pixels --- because on an
 object the pipeline already has there is nothing left to propose but its edge.
+Fig.~\ref{fig:geometry_cases} shows one real candidate from each cell.
+
+\begin{figure}[t]
+    \centering
+    \resizebox{\columnwidth}{!}{\input{diagrams/candidate_geometry.tex}}
+    \caption{The two things an object-discovery stage can be doing, separated by the geometry of the
+    candidate and scored by the human verdict on it. Because SAM's coverage is subtracted before
+    connected components are formed, a candidate on an object the pipeline already segmented is only
+    the rim left over (left column), and a rejected rim is therefore paint applied \emph{beside} a
+    correct object rather than a harmless duplicate. Only the right column can contain an object SAM
+    never proposed, and only its lower cell is a genuine recovery. Which column a candidate falls in
+    is decidable from geometry alone, before any model call and without a human label.}
+    \label{fig:candidate_geometry}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \begin{subfigure}[b]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/geom_edge_bleed.png}
+        \caption{Edge bleed (52.0\,\%)}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/geom_false_alarm.png}
+        \caption{False alarm (15.2\,\%)}
+    \end{subfigure}
+
+    \vspace{3pt}
+    \begin{subfigure}[b]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/geom_boundary_growth.png}
+        \caption{Boundary growth (26.6\,\%)}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/geom_new_object.png}
+        \caption{New object (6.1\,\%)}
+    \end{subfigure}
+    \caption{One real candidate per cell of Fig.~\ref{fig:candidate_geometry}, same palette: grey
+    with a white outline is a same-class SAM mask the pipeline already had, orange is a candidate the
+    human rejected, teal one they kept. (a) a correctly segmented sign with a large region painted
+    beside it --- paint on background, not a duplicate. (b) a region on foliage where no sign exists.
+    (c) SAM had the pedestrian's head and shoulders only, so the rim really is the rest of the
+    object. (d) a row of cars SAM never proposed. The ring test is local ($9\,$px), so a same-class
+    mask elsewhere in the frame --- visible in (b) and (d) --- does not make a candidate a rim.}
+    \label{fig:geometry_cases}
+\end{figure}
 
 \textbf{Discovery is not, however, useless, and the aggregate hides what it does recover.}
 The same join isolates 841 candidates --- 0.85 per frame, $\approx$3{,}400 extrapolated over the
@@ -669,7 +693,6 @@ The earlier reading was an artifact of the serving fault, which is why we now re
 
 \input{tables/agent_behavior}
 
-
 Table~\ref{tab:agent_performance} quantifies signal agreement using Swin quality as the reference on the 72{,}989 paired masks with Swin scores available (geometry-prefiltered masks are excluded).
 LLaVA achieves balanced precision and recall (71.8 / 71.4, F1 71.6), indicating selective verdicts that align with Swin.
 Qwen is the higher-recall, lower-precision judge (78.5 / 68.3, F1 73.0), consistent with the more permissive verdict distribution in Table~\ref{tab:agent_behavior}; restricting Qwen to answered masks raises both precision and accuracy (75.1 and 67.3), which quantifies how much of its apparent permissiveness was the safe-default substitution rather than the model.
@@ -695,17 +718,6 @@ points in every condition, which is consistent with a mechanism --- coarse upsam
 into the labels --- that does not depend on visibility.
 
 \input{tables/weather_miou}
-
-\subsection{Modality Ablation}
-
-Table~\ref{tab:modality_ablation} isolates the contribution of each sensor modality by training
-CLFTv2-Base in RGB-only, LiDAR-only, and CrossFusion configurations with the annotations held fixed at
-ZOD's own ground truth on the curated clean partition.
-Holding the labels fixed is what makes this the one table in the paper whose arms can be scored against
-the labels they trained on without bias: the variable is the input, not the supervision.
-A modality breakdown of the pseudo-label variants would confound the two and is not attempted.
-
-\input{tables/modality_ablation}
 
 \subsection{Cross-Dataset Generalisation}
 
@@ -822,10 +834,11 @@ The Swin agreement filter is the only automated stage measured so far with a pos
 effect: $+3.9$ mIoU over unfiltered SAM labels (Table~\ref{tab:ablation}), for one forward pass per
 frame at $<$0.01\,s per mask. It also dominates VLM triage on the false-accept axis
 (23.5\,\% vs.\ 59.5\,\%), and its operating point is the one that does not move as the human reference
-tightens. The VLM triage rows are still training, so the comparison they will settle is not yet
-closed; but the bar those runs must clear is a stage that is essentially free, and the mask-level
-evidence has them on the wrong side of the error direction that matters. We would not deploy the VLM
-triage stage as an automatic filter on this data.
+tightens. The downstream ladder now closes that comparison in the same direction: layering VLM triage
+on top of the Swin threshold costs $-3.0$ mIoU with LLaVA and $-2.7$ with Qwen, and leaves labels
+statistically indistinguishable from unfiltered SAM. The VLM triage stage is therefore not a marginal
+purchase at this price; it is a negative one at any price, and we would not deploy it as an automatic
+filter on this data.
 
 \textbf{Gate discovery on geometry, which is free, rather than on a second VLM, which is not.}
 Discovery is negative downstream at every configuration measured, and by a wide margin: $-9.4$ mIoU
@@ -897,14 +910,13 @@ Training logs, model outputs, and visualization dashboards are accessible at
 
 This work evaluates a multi-agent refinement pipeline for SAM-based annotation in autonomous driving, combining a domain-adapted Swin Transformer with fixed-prompt visual--LLM agents and deterministic decision rules. Across experiments on ZOD, the Swin Quality Agent, trained on a small clean partition, provides a stable signal for both mask triage and object discovery, enabling refinement with a single forward pass per frame and supporting fully reproducible offline ablations.
 
-Under a single evaluation reference with paired bootstrap confidence intervals, we compare filtering strategies that use no VLM against those that do. That reference is now the human pass itself: the verified frames are held out of training entirely and every ladder variant is scored on all of them, which removes the SAM-derived circularity that limited the earlier comparison; the VLM-dependent rows are supplied by runs still in progress and are reported as pending rather than carried over from the superseded checkpoints, which were trained on pre-correction annotations and scored against a different reference.
-The VLM-independent ladder is complete and its ordering is unambiguous. The free deterministic quality signal is the one automated stage that helps: thresholding on Swin agreement is worth $+3.9$ mIoU over unfiltered SAM labels for one forward pass per frame. Swin-driven object discovery is strongly negative, $-9.4$ mIoU against the same filtered labels and $-5.5$ against doing nothing at all, uniform across weather conditions and present in all three classes rather than confined to the ones it adds --- which is what the candidate-level precisions predicted and the aggregate confirms at more than twice the magnitude of the filter's gain.
+Under a single evaluation reference with paired bootstrap confidence intervals, we compare filtering strategies that use no VLM against those that do. That reference is now the human pass itself: the verified frames are held out of training entirely and every ladder variant is scored on all of them, which removes the SAM-derived circularity that limited the earlier comparison; the two full-pipeline rows are supplied by runs still in progress and are reported as pending rather than carried over from the superseded checkpoints, which were trained on pre-correction annotations and scored against a different reference.
+The ordering of the ladder is unambiguous. The free deterministic quality signal is the one automated stage that helps: thresholding on Swin agreement is worth $+3.9$ mIoU over unfiltered SAM labels for one forward pass per frame. Layering zero-shot VLM triage on top of that threshold gives most of it back --- $-3.0$ mIoU with LLaVA-1.6-34B and $-2.7$ with Qwen2.5-VL-72B, the two backends indistinguishable from each other and neither distinguishable from not filtering at all --- so the stage costing 109--352\,s of GPU time per frame is the one stage that is both the most expensive and measurably harmful. Swin-driven object discovery is strongly negative, $-9.4$ mIoU against the same filtered labels and $-5.5$ against doing nothing at all, uniform across weather conditions and present in all three classes rather than confined to the ones it adds --- which is what the candidate-level precisions predicted and the aggregate confirms at more than twice the magnitude of the filter's gain.
 Joining candidate geometry to the human verdicts says what that stage was actually doing. It is not that discovery finds nothing: it recovers 841 objects here that SAM never proposed, some 3{,}400 extrapolated over the candidate pool, concentrated in signs. It is that those are 6.1\,\% of what it proposes, while 78.6\,\% are rims on objects the pipeline had already segmented and two thirds of those rims a human rejected --- 0.85 confirmed recoveries per frame against 9.35 rejected regions painted into the same labels. A stage built for object recovery is, measured against a human, mostly a boundary editor. In pixels the contamination is severe enough to account for the deficit on its own: discovery inflates the object-pixel budget by 37.5\,\%, 61.7\,\% of what it adds is pixels a human rejected, and those amount to 23.1\,\% of all object pixels in the labels it produces. We stop short only of calling that the operative cause rather than a sufficient one, which a variant gating candidates on whether they abut a same-class mask --- needing neither a model call nor a human label --- would settle.
 Human cleaning of the same labels, in a controlled arm where training-set size is held fixed and the only difference is whether rejected masks are erased, is worth $+2.5$ mIoU for the deletion of 5.3\,\% of object pixels, with a per-class response that tracks the per-class deletion dose. On this corpus, label purity is the binding constraint and human deletion is the cheapest way to buy it.
 It does not remove every limitation --- an object that neither SAM nor discovery ever proposed is absent from the reference, so a model that segments it is still penalised --- but the bias now runs only against the discovery variants, in the same direction the candidate-level measurement already establishes.
 
 Applying identical prompts to Qwen2.5-VL-72B shows that fixed prompts do not transfer neutrally between open VLMs, and that the failure is localised rather than global. Qwen is the more permissive mask judge, by at least 5.1 points on masks both models answered, but it redistributes rather than uniformly relaxes its rejections: it rejects fewer signs and cyclists than LLaVA and more vehicles and pedestrians, and the two models agree on only 57.0\% of crops. On discovery they confirm the same candidate stream at almost the same aggregate rate, with the entire divergence concentrated in the single prompt that disambiguates cyclist from pedestrian, where Qwen confirms 45.3\% against LLaVA's 85.9\%. Portability validation must therefore be per-prompt and per-class: one aggregate acceptance rate per model would have scored these two as near-equivalent on discovery while missing a large deficit on the two safety-critical classes.
-
 
 The architecture is backend-agnostic and suitable for local deployment.
 Future work follows from the two limits this study reached rather than from its successes.

@@ -1,0 +1,84 @@
+\begin{tikzpicture}[
+  >=Stealth,
+  node distance=3.5mm,
+  every node/.style={font=\small},
+  block/.style={draw, rounded corners, align=center,
+                minimum width=25mm, minimum height=6.5mm, fill=blue!10},
+  agent/.style={draw, rounded corners, align=center,
+                minimum width=25mm, minimum height=6.5mm, fill=purple!12},
+  swinnode/.style={draw, rounded corners, align=center,
+                   minimum width=25mm, minimum height=6.5mm, fill=orange!18},
+  discnode/.style={draw, rounded corners, align=center,
+                   minimum width=25mm, minimum height=6.5mm, fill=teal!12},
+  decision/.style={draw, rounded corners, align=center,
+                   minimum width=25mm, minimum height=7mm, fill=yellow!18},
+  output/.style={draw, rounded corners, align=center,
+                 minimum width=25mm, minimum height=7mm, fill=green!20},
+  condagent/.style={draw=gray, dashed, rounded corners, align=center,
+                    minimum width=25mm, minimum height=6.5mm, fill=gray!6,
+                    text=gray},
+]
+
+%% ── LEFT: Triage pipeline ─────────────────────────────────────────────────────
+\node[block] (input)
+  {Input Frame\\[-1pt]{\scriptsize Camera + LiDAR + SAM Masks}};
+
+\node[swinnode, below=6mm of input] (swin)
+  {Swin Quality Agent\\[-1pt]{\scriptsize one forward pass / frame}};
+
+%% Per-mask agents — execution order: Consistency → BBox → (Correction refine only)
+\node[agent, below=6mm of swin] (consist)
+  {Consistency Check (det.)\\[-1pt]{\scriptsize LiDAR support $\geq\tau$}};
+
+\node[agent, below=of consist] (bbox)
+  {BBox Agent (VLM)\\[-1pt]{\scriptsize valid / invalid / background}};
+
+\node[condagent, below=of bbox] (correct)
+  {Correction Agent (VLM)\\[-1pt]{\scriptsize refine path only}};
+
+\node[decision, below=of correct] (triage)
+  {Triage Decision\\[-1pt]{\scriptsize accept / refine / reject / review}};
+
+%% ── RIGHT: Discovery pipeline ────────────────────────────────────────────────
+\node[discnode, right=9mm of swin] (uncov)
+  {Uncovered Regions\\[-1pt]{\scriptsize Swin class $\cap$ SAM background}};
+
+\node[discnode, below=of uncov] (cc)
+  {Connected Components\\[-1pt]{\scriptsize $\geq 20$\,px, top-$K$ by area}};
+
+\node[agent, below=of cc] (disc_vlm)
+  {VLM Confirmation\\[-1pt]{\scriptsize confirm + classify class}};
+
+\node[discnode, below=of disc_vlm] (confirmed)
+  {Confirmed Discoveries};
+
+%% ── Failure-mode agent (diagnostic) ─────────────────────────────────────────
+\node[agent, below right=3mm and 1mm of triage, anchor=north west,
+      minimum width=20mm, fill=purple!8, font=\scriptsize] (fma)
+  {Failure-Mode Agent\\{\tiny diagnostic only}};
+
+%% ── Output ───────────────────────────────────────────────────────────────────
+\node[output, below=10mm of triage] (out)
+  {Refined Annotation\\[-1pt]{\scriptsize triage results + discoveries}};
+
+%% ── Main triage flow ─────────────────────────────────────────────────────────
+\draw[->] (input)   -- (swin);
+\draw[->] (swin)    -- (consist);
+\draw[->] (consist) -- (bbox);
+\draw[->, gray, dashed] (bbox)    -- (correct);
+\draw[->, gray, dashed] (correct) -- (triage);
+\draw[->] (triage.south) -- (out.north);
+\draw[->, gray, dashed] (triage.east) -| (fma.north);
+
+%% BBox → Triage direct path (accept / reject / review — skips Correction)
+\draw[->] (bbox.east) -- ++(4mm,0) |- (triage.east);
+
+%% ── Discovery branch ─────────────────────────────────────────────────────────
+\draw[->] (swin.east)
+  -- node[above, font=\scriptsize]{discovery} (uncov.west);
+\draw[->] (uncov)    -- (cc);
+\draw[->] (cc)       -- (disc_vlm);
+\draw[->] (disc_vlm) -- (confirmed);
+\draw[->] (confirmed.south) |- (out.east);
+
+\end{tikzpicture}

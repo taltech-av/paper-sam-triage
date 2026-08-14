@@ -8,8 +8,8 @@
          a balanced design, so the strata differ in size by more than an order of magnitude. Read the
          overall comparison off the pooled paired bootstrap in Table~\ref{tab:ablation}: a mean over
          these five columns would weight the 29-frame snow stratum like the 661-frame day-fair one.
-         The three VLM-independent rows are final; the four VLM rows are \pending{pending} on runs
-         still in progress.}
+         The three VLM-independent rows and both triage rows are final; the two full-pipeline rows
+         are \pending{pending} on runs still in progress.}
 \label{tab:weather_miou}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccccc}
@@ -20,8 +20,8 @@
 Raw SAM                & 41.6 & 42.9 & 37.1 & 36.4 & 43.6 \\
 \textbf{Swin only}     & \textbf{45.4} & \textbf{46.3} & \textbf{44.1} & \textbf{39.7} & \textbf{45.5} \\
 Swin + disc.\ (no VLM) & 36.1 & 36.3 & 34.0 & 29.4 & 38.1 \\
-Triage (LLaVA)         & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
-Triage (Qwen)          & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
+Triage (LLaVA)         & 43.8 & 44.4 & 37.8 & 33.1 & 46.6 \\
+Triage (Qwen)          & 43.7 & 44.0 & 39.8 & 34.4 & 45.3 \\
 Triage + disc.\ (LLaVA)& \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
 Triage + disc.\ (Qwen) & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} \\
 \bottomrule
