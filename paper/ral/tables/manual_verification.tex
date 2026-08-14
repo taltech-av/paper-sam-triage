@@ -4,16 +4,13 @@
 %   python analyze_human_verification.py --export human_verified_output/verify_export.csv
 \begin{table}[t]
 \centering
-\caption{Manual verification of the flagged partition: a single \texttt{mask\_toggle} job over all
-         4{,}110 frames in which every SAM proposal and every Swin discovery candidate is shown
-         together and the labeller marks the errors, never told which model produced which region.
-         \emph{Incorrect} is the share a human rejected. Discovery candidates are split by
-         \emph{kind}: \emph{standalone} candidates are regions SAM missed entirely, where precision
-         measures what discovery recovers, and \emph{fringe} candidates are the rim left around an
-         object SAM already covered, where it measures boundary completion. A pooled number is
-         dominated by fringes and would read as a recall gain. \emph{Regions} is the job as built;
-         \emph{judged} is the closed pass, a \humansample\ sample whose representativeness is
-         established in Section~\ref{sec:human_verification}.}
+\caption{Manual verification of the flagged partition: one job over all 4{,}110 frames in which
+         every SAM proposal and every discovery candidate is shown together and the labeller marks
+         the errors, never told which model produced which region. \emph{Standalone} candidates are
+         regions SAM missed entirely and \emph{fringe} candidates the rim left around an object SAM
+         already covered; a pooled rate is dominated by fringes and would read as a recall gain.
+         \emph{Regions} is the job as built, \emph{judged} the closed \humansample\ pass
+         (Section~\ref{sec:human_verification}).}
 \label{tab:manual_verification}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{llrrrr}
@@ -33,17 +30,14 @@ Discovery candidates     & fringe     & 38{,}850  & 9{,}652  & 6{,}269  & 65.0 \
 
 \begin{table*}[t]
 \centering
-\caption{Agreement of each automated decision with the human verdict. Every mask carries every
-         run's decision, so one human pass scores all sources. A \emph{false accept} is a mask the
-         pipeline kept that the human rejected, the error that puts wrong pixels into a training
-         label; a \emph{false reject} is a mask it deleted that the human kept, which only leaves
-         those pixels unlabelled. The two costs are not symmetric and are reported separately rather
-         than as one accuracy: F1 pools them, and with only 20.4\,\% of proposals actually wrong it
-         rewards the rule that keeps everything, which is why the F1 column ranks these rules in the
-         opposite order to the downstream mIoU of Table~\ref{tab:ablation}. Swin-only and the
-         deterministic LiDAR check use no VLM and are included as the cost benchmark the VLM stage
-         must beat. Intervals resample frames, not masks, since masks in one frame share a scene and
-         a labeller's calibration.}
+\caption{Agreement of each automated decision with the human verdict; every mask carries every run's
+         decision, so one pass scores all sources. A \emph{false accept} is a mask the pipeline kept
+         that the human rejected --- the error that puts wrong pixels into a training label --- and
+         a \emph{false reject} one it deleted that the human kept, which only leaves those pixels
+         unlabelled. The costs are asymmetric, so the two are reported separately rather than as one
+         accuracy: F1 pools them and, with only 20.4\,\% of proposals wrong, rewards the rule that
+         keeps everything, which is why it ranks these rules in the opposite order to the downstream
+         mIoU of Table~\ref{tab:ablation}. Intervals resample frames, not masks.}
 \label{tab:human_agreement}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrr}

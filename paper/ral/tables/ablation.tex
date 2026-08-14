@@ -10,18 +10,14 @@
 \begin{table*}[t]
 \centering
 \caption{Annotation variant ablation on CLFTv2-Base (RGB--LiDAR CrossFusion). The ladder is nested:
-         each step adds exactly one pipeline stage, so a change in score is attributable to that
-         stage. All variants train on the same 2{,}642 flagged frames carrying no human labels and
-         are evaluated on the same held-out 1{,}001 human-verified frames against those labels, so
-         no human label is spent on training and no variant is graded against its own labels.
-         mIoU averages vehicle, sign, and human (cyclist $+$ pedestrian), taken as the mean over the
-         five weather-condition mIoUs; fw-IoU weights each class by pixel frequency.
-         The last column is the \emph{paired} mIoU difference against Swin only, with a 95\,\% CI
-         from 10{,}000 weather-stratified resamples of the test frames using identical indices for
-         every variant; an interval excluding zero means the variant differs significantly.
-         The three VLM-independent rows and both triage rows are final; the two full-pipeline rows
-         are \pending{pending} on runs still in progress and no value is reported for them in
-         advance.}
+         each step adds exactly one stage, so a change is attributable to that stage. All variants
+         train on the same 2{,}642 flagged frames carrying no human labels and are evaluated on the
+         same held-out 1{,}001 human-verified frames, so no human label is spent on training and no
+         variant is graded against its own labels. mIoU averages vehicle, sign, and human
+         (cyclist $+$ pedestrian) as the mean over the five weather mIoUs; fw-IoU weights by pixel
+         frequency. The last column is the \emph{paired} difference against Swin only, 95\,\% CI
+         from 10{,}000 weather-stratified resamples with identical indices for every variant. The
+         two full-pipeline rows are \pending{pending} on runs in progress; all others are final.}
 \label{tab:ablation}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llc ccccc l}

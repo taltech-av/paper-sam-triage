@@ -11,29 +11,50 @@
 % nothing.
 \begin{table}[t]
 \centering
-\caption{What each discovery candidate was lying against, joined to the human verdict on it.
-         A candidate is \emph{same-class} when the ring of SAM pixels around it contains a mask of
-         its own class, which separates the two things the stage can be doing: editing the boundary
-         of an object the pipeline already has, or proposing one it does not. Because candidates are
-         SAM-subtracted before components are formed, a rim never overlaps the mask it surrounds, so
-         a rejected rim is not a harmless duplicate but paint applied beside a correct object.
-         Shares are of the 13{,}695 answered candidates and of the 10.7\,M pixels they painted; the
-         two differ because outcomes differ in mean region size, and the pixel share is the one the
-         downstream loss responds to. ``Final 200'' is the candidate share over the last 200 frames,
-         the calibration in force at the end of a non-stationary pass
-         (Section~\ref{sec:human_verification}).}
+\caption{What each discovery candidate was lying against, crossed with the human verdict on it. The
+         four outcomes are one factorial, not four categories: the columns ask whether the ring of
+         SAM pixels around a candidate contains a mask of its \emph{own class} --- which separates
+         editing the boundary of an object the pipeline already has from proposing one it does not
+         --- and the rows carry the verdict. Only the right column can hold an object SAM never
+         proposed, and only its lower cell is a genuine recovery. Cells give the candidate count and
+         then three shares: \% of the 13{,}695 answered candidates / \% of the 10.7\,M pixels they
+         painted / \% of candidates over the final 200 frames, the calibration in force at the end
+         of a non-stationary pass. Margins give the first two only. The pixel share is the one the
+         downstream loss responds to, and it is what makes the top row read as it does: 61.7\,\% of
+         everything discovery paints, a human rejected. Because candidates are SAM-subtracted before
+         connected components are formed, a rim never overlaps the mask it surrounds --- so a
+         rejected rim is paint applied \emph{beside} a correct object rather than a harmless
+         duplicate.}
 \label{tab:discovery_geometry}
 \resizebox{\columnwidth}{!}{%
-\begin{tabular}{llrrrr}
+\begin{tabular}{lccc}
 \toprule
-\textbf{Outcome} & \textbf{Geometry / verdict} & \textbf{n} & \textbf{\% cand.} & \textbf{\% px} & \textbf{Final 200} \\
+ & \multicolumn{2}{c}{\textbf{Ring around the candidate}} & \\
+\cmidrule(lr){2-3}
+ & \textbf{contains a same-} & \textbf{contains no} & \textbf{Total} \\
+ & \textbf{class SAM mask}   & \textbf{same-class mask} & \\
 \midrule
-Edge bleed      & same-class, rejected & 7{,}123 & 52.0 & 47.5 & 64.0 \\
-Boundary growth & same-class, kept     & 3{,}647 & 26.6 & 29.0 & 13.1 \\
-False alarm     & no same-class, rejected & 2{,}084 & 15.2 & 14.2 & 21.1 \\
-New object      & no same-class, kept  &    841 &  6.1 &  9.3 &  1.8 \\
+\multirow{3}{*}{\textbf{Human rejected}}
+  & \textit{Edge bleed}   & \textit{False alarm} & \\
+  & 7{,}123               & 2{,}084             & 9{,}207 \\
+  & 52.0 / 47.5 / 64.0    & 15.2 / 14.2 / 21.1  & 67.2 / 61.7 \\
+\addlinespace
+\multirow{3}{*}{\textbf{Human kept}}
+  & \textit{Boundary growth} & \textit{New object} & \\
+  & 3{,}647                  &    841             & 4{,}488 \\
+  & 26.6 / 29.0 / 13.1       &  6.1 /  9.3 /  1.8 & 32.8 / 38.3 \\
 \midrule
+\textbf{Total} & 78.6 / 76.5 & 21.4 / 23.5 & 13{,}695 \\
+\bottomrule
+\end{tabular}}
+
+\vspace{3pt}
+
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrrrrr}
+\toprule
 \multicolumn{6}{l}{\textit{Per class: share of that class's added pixels}} \\
+\addlinespace[1pt]
 \textbf{Class} & \textbf{Added px} & \textbf{Bleed} & \textbf{Growth} & \textbf{Alarm} & \textbf{New} \\
 \midrule
 Vehicle & 5{,}504{,}600 & 41.3 & 42.5 &  8.1 &  8.1 \\

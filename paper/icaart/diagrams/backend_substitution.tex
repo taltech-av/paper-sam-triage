@@ -1,0 +1,100 @@
+%% ICAART: the backend-substitution design. This is the paper's own drawing and is
+%% disjoint from the companion's: no downstream training stage (this paper reports
+%% none) and no human reference. What it draws instead is the control that makes the
+%% comparison attributable -- everything above the fork is computed once and reused
+%% bit-identically by both runs, so only the shaded VLM column varies.
+\begin{tikzpicture}[
+  >=Stealth,
+  every node/.style={font=\scriptsize},
+  corpblock/.style={draw, rounded corners=2pt, align=center, fill=black!6,
+                    minimum width=3.0cm, minimum height=0.56cm},
+  samblock/.style ={draw, rounded corners=2pt, align=center, fill=blue!14,
+                    minimum width=3.0cm, minimum height=0.56cm},
+  swinblock/.style={draw, rounded corners=2pt, align=center, fill=orange!20,
+                    minimum width=3.0cm, minimum height=0.56cm},
+  detblock/.style ={draw, rounded corners=2pt, align=center, fill=gray!14,
+                    minimum width=2.7cm, minimum height=0.56cm},
+  vlmblock/.style ={draw, rounded corners=2pt, align=center, fill=purple!14,
+                    minimum width=3.5cm, minimum height=0.90cm},
+  annblock/.style ={draw, rounded corners=2pt, align=center, fill=blue!8,
+                    minimum width=3.5cm, minimum height=0.56cm},
+  cmpblock/.style ={draw, rounded corners=2pt, align=center, fill=yellow!28,
+                    minimum width=5.6cm, minimum height=0.56cm},
+  arr/.style={->, thick},
+  lin/.style={thick},
+  darr/.style={->, dashed, black!45, thick},
+  stageLabel/.style={font=\tiny\bfseries, text=black!65},
+]
+
+%% ── Corpus ──────────────────────────────────────────────────────────────────
+\node[corpblock] (clean) at (2.3, 0)
+  {Clean partition\\[-2pt]{\tiny 2{,}319 curated frames}};
+\node[corpblock] (flag) at (7.7, 0)
+  {Flagged partition\\[-2pt]{\tiny 4{,}110 frames}};
+
+\node[swinblock] (swinpre) at (2.3, -1.15)
+  {CLFTv2-Large (SwinV2-L)};
+\node[samblock] (sam) at (7.7, -1.15)
+  {SAM (ViT-H)\\[-2pt]{\tiny 90{,}176 mask proposals}};
+
+%% ── Shared, computed once ───────────────────────────────────────────────────
+\node[detblock] (consist) at (1.7, -2.75)
+  {Consistency check\\[-2pt]{\tiny LiDAR support}};
+\node[detblock, fill=orange!20] (quality) at (5.0, -2.75)
+  {Quality agent\\[-2pt]{\tiny per-mask $\alpha$}};
+\node[detblock, fill=orange!20] (cand) at (8.3, -2.75)
+  {Discovery candidates\\[-2pt]{\tiny 55{,}256 regions}};
+
+%% ── The fork: the only thing that changes ───────────────────────────────────
+\node[vlmblock] (runA) at (2.6, -4.85)
+  {\textbf{LLaVA-1.6-34B}\\[1pt]{\tiny BBox $\cdot$ Correction $\cdot$ Discovery confirm}};
+\node[vlmblock] (runB) at (7.4, -4.85)
+  {\textbf{Qwen2.5-VL-72B}\\[1pt]{\tiny BBox $\cdot$ Correction $\cdot$ Discovery confirm}};
+
+\node[annblock] (annA) at (2.6, -6.15) {Annotation set A};
+\node[annblock] (annB) at (7.4, -6.15) {Annotation set B};
+
+\node[cmpblock] (cmp) at (5.0, -7.30)
+  {Paired comparison, at mask level};
+
+%% ── Enclosures ──────────────────────────────────────────────────────────────
+\begin{scope}[on background layer]
+  \fill[gray!4, draw=black!22, dashed, rounded corners=3pt, line width=0.6pt]
+    (0.15, -2.22) rectangle (9.85, -3.28);
+  \fill[purple!4, draw=purple!45, dashed, rounded corners=3pt, line width=0.7pt]
+    (0.55, -4.20) rectangle (9.45, -5.50);
+\end{scope}
+
+\node[stageLabel] at (5.0, -2.02) {computed once --- verified bit-identical in both runs};
+\node[stageLabel, text=purple!65] at (5.0, -3.98) {the only component that changes};
+
+%% ── Arrows ──────────────────────────────────────────────────────────────────
+\draw[arr] (clean) -- (swinpre);
+\draw[arr] (flag)  -- (sam);
+
+\draw[darr] (swinpre.south) -- (2.3, -2.75)
+  -- node[above, font=\tiny, pos=0.62]{loads} (quality.west);
+
+%% SAM proposals fan out to the shared signals
+\draw[lin] (sam.south) -- (7.7, -2.35);
+\draw[lin] (1.7, -2.35) -- (8.3, -2.35);
+\draw[arr] (1.7, -2.35) -- (consist.north);
+\draw[arr] (8.3, -2.35) -- (cand.north);
+
+%% shared signals feed both runs over one bus
+\draw[lin] (consist.south) -- (1.7, -3.72);
+\draw[lin] (quality.south) -- (5.0, -3.72);
+\draw[lin] (cand.south)    -- (8.3, -3.72);
+\draw[lin] (1.7, -3.72) -- (8.3, -3.72);
+\draw[arr] (2.6, -3.72) -- (runA.north);
+\draw[arr] (7.4, -3.72) -- (runB.north);
+
+\draw[arr] (runA) -- (annA);
+\draw[arr] (runB) -- (annB);
+
+\draw[lin] (annA.south) -- (2.6, -6.85);
+\draw[lin] (annB.south) -- (7.4, -6.85);
+\draw[lin] (2.6, -6.85) -- (7.4, -6.85);
+\draw[arr] (5.0, -6.85) -- (cmp.north);
+
+\end{tikzpicture}

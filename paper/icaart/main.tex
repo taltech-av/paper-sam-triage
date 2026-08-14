@@ -7,17 +7,27 @@
 % the bibliography style, and re-fit. Single-column will change the page count
 % materially, so treat the current page number as indicative only.
 %
-% This paper is the SYSTEM half of the split. It owns:
+% This paper is the SYSTEM + CORPUS half of the split. It owns:
 %   · the five-agent architecture, the output contracts and the safe-default policy
-%   · the controlled cross-backend comparison (LLaVA-1.6-34B vs Qwen2.5-VL-72B)
+%   · the corpus: partition construction, split protocol, class distributions
+%   · the controlled cross-backend comparison (LLaVA-1.6-34B vs Qwen2.5-VL-72B),
+%     scored model-against-model -- which is all an agreement statistic can settle
 %   · prompt portability, per-agent and per-class
 %   · the serving-fault disclosure and the response-provenance decomposition
 %   · deployment cost, and the qualitative behaviour of the triage rule
 %
 % It does NOT own: the human reference construction, the purity/volume analysis,
 % the downstream mIoU ladder, the discovery geometry decomposition, the cleaning
-% contrast, or review targeting. Those are \cite{audit}. Tables and diagrams here
-% are disjoint from that paper's by construction -- see paper/SPLIT.md.
+% contrast, or review targeting. Nor does it own the cross-model comparison scored
+% AGAINST HUMANS -- that inverts by class and is a headline of \cite{audit}. Keep
+% the distinction sharp: here the two backends are compared to each other, and the
+% paper says so.
+%
+% Asset sets are disjoint from \cite{audit} by construction -- tables, photo figures
+% AND diagrams. This paper draws backend_substitution (what is shared vs what forks)
+% and pipeline_end_to_end (agent execution order); \cite{audit} draws
+% architecture_overview (where the audit attaches) and candidate_geometry. There is
+% no longer a filename shared between the two directories.
 %
 % ALL NUMBERS BELOW COME FROM tables/*.tex, which compare_models.py regenerated on
 % the full 4,110-frame / 90,176-mask paired set. Do not reintroduce figures from
@@ -105,7 +115,9 @@ difference traces to the VLM, and we verify the non-VLM inputs were bit-identica
 
 Our contributions are as follows. We describe an annotation system whose agent roles, output
 contracts, and default-substitution policy are explicit enough that cross-backend differences can be
-attributed rather than merely observed. We report a controlled portability study over 90{,}176 mask
+attributed rather than merely observed, together with the driving corpus it runs over and the
+partition and split protocol both this study and its companion~\cite{audit} rest on. We report a
+controlled portability study over 90{,}176 mask
 proposals and 55{,}256 discovery candidates showing that fixed prompts transfer neither uniformly
 across agents nor uniformly across classes, and that a per-model aggregate rate --- the statistic
 such comparisons usually report --- would have scored the two backends as near-equivalent on the
@@ -115,9 +127,11 @@ degraded backend look like a sceptical one, and we quantify the deployment cost 
 against the annotation distribution it actually produces.
 
 Whether any of these agents \emph{should} be deployed --- each signal scored against human verdicts,
-with downstream segmentation effect --- is a separate study~\cite{audit}; prompts and the complete
-result set are in an accompanying technical report~\cite{techreport}. Here the question is narrower
-and prior to both: given that such a system is built, what changes when its backend does?
+with downstream segmentation effect --- is a separate study~\cite{audit}. Here the question is
+narrower and prior to both: given that such a system is built, what changes when its backend does?
+The agent implementations, the verbatim prompts, and the stored responses every rate below is
+computed from are released as open
+source.\footnote{\url{https://github.com/taltech-av/paper-vlm-annotation-pipeline}}
 
 \section{Related Work}
 
@@ -151,15 +165,14 @@ replaced.
 
 \begin{figure}[t]
     \centering
-    \resizebox{\columnwidth}{!}{\input{diagrams/architecture_overview.tex}}
-    \caption{System architecture. \textbf{(1)} SAM (ViT-H) generates class-labeled masks from ZOD
-    frames using detection boxes as prompts. \textbf{(2)} CLFTv2-Large (SwinV2-L) is pre-trained on
-    2{,}319 curated clean frames and serves as the Quality Agent. \textbf{(3)} The Quality Agent
-    scores each mask and proposes discovery candidates; the VLM backend under test supplies the
-    semantic verdicts; a deterministic triage rule fuses all signals. \textbf{(4)} Refined
-    annotations train CLFTv2-Base. Only stage (3)'s VLM agents change between the two runs compared
-    in this paper; stages (1) and (2) are computed once and shared, which is what makes the
-    comparison attributable.}
+    \resizebox{\columnwidth}{!}{\input{diagrams/backend_substitution.tex}}
+    \caption{The substitution design, and the control that makes its result attributable. Everything
+    above the fork is computed once and reused: SAM's proposals, the deterministic LiDAR check, the
+    Quality Agent's per-mask agreement and the discovery candidate set are byte-identical inputs to
+    both runs, verified rather than assumed (Section~\ref{sec:protocol}). Only the shaded column
+    changes, and within it only the three VLM agents, so every difference between the two annotation
+    sets traces to the backend. The triage rule is recomputed offline under one revision for both,
+    which is what stops a rule change between campaigns from presenting as a model difference.}
     \label{fig:architecture}
 \end{figure}
 
@@ -236,6 +249,42 @@ answered rate and 100\,\%, giving
 \end{equation}
 for \emph{any} run, whatever its default share. We use this bound below to establish a direction
 without needing the unrecoverable half of the measurement.
+
+\section{Corpus}
+\label{sec:corpus}
+
+The system runs over the Zenseact Open Dataset (ZOD)~\cite{alibeigi2023zod}. A prior annotation
+campaign generated SAM masks for every candidate frame and inspected each one, accepting or
+discarding the frame as a whole. That inspection is what defines the two partitions this work uses
+(Table~\ref{tab:dataset}): a \emph{clean} partition of 2{,}319 frames whose annotations passed, which
+trains the Quality Agent and is never annotated by the system, and a \emph{flagged} partition of
+4{,}135 frames whose annotations did not, which is what the agents are run over. Of those, 25 could
+not be annotated cleanly and are excluded, leaving the 4{,}110 frames and 90{,}176 mask proposals
+reported throughout; the excluded set is not distinguishable from a random draw of the same size by
+mask count (permutation test, $p{=}0.30$).
+
+The two partitions differ in exactly the way the inspection implies. Flagged frames carry 21.9 masks
+each against the clean partition's 15.5, consistent with crowded scenes being harder for SAM and
+likelier to fail inspection, and the flagged partition is denser in object pixels in every weather
+condition (Table~\ref{tab:dataset_distributions}). This matters for reading the results below: the
+corpus the two backends are compared on is deliberately the difficult half, so verdict rates
+measured here are not estimates of what either model would return on an average driving frame.
+
+\input{tables/dataset}
+
+Both partitions are split independently under one procedure. Frames are grouped into ten strata,
+weather condition (day-fair, day-rain, night-fair, night-rain, snow) crossed with rare-class
+presence (cyclist or pedestrian pixels $\geq50$), so each split mirrors the overall weather and
+class-frequency distribution; 10\,\% of each stratum is held out for validation and the remainder
+divided between test and training. Because night-rain and snow are under-represented in ZOD, a floor
+of 40 frames per weather category is enforced in the test set, which raises the effective test ratio
+for those conditions only. Table~\ref{tab:splits} gives the resulting sizes. The splits are not
+exercised by this paper, which trains nothing --- both runs annotate the same frames and are compared
+to each other --- but they define the partition boundaries the companion study~\cite{audit} trains
+and evaluates over, and are reported here so that both papers rest on one documented corpus.
+
+\input{tables/splits}
+\input{tables/dataset_distributions}
 
 \section{Comparison Protocol}
 \label{sec:protocol}
