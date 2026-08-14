@@ -27,7 +27,9 @@
          A paired difference is the statistic this design supports: all variants are evaluated on the
          same frames, so per-variant marginal CIs overlap far more than the differences themselves and
          understate the separation.
-         An interval excluding zero means the variant differs significantly from Swin only. \pendingnote}
+         An interval excluding zero means the variant differs significantly from Swin only.
+         The three VLM-independent rows are final; the four VLM rows are \pending{pending} on runs
+         still in progress and no value is reported for them in advance.}
 \label{tab:ablation}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llc ccccc l}
@@ -35,9 +37,9 @@
 \textbf{Variant} & \textbf{Description} & \textbf{VLM} &
   \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & \textbf{$\Delta$mIoU vs Swin only (95\% CI)} \\
 \midrule
-Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
-Swin only & Swin agreement threshold; no VLM & \textemdash & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \textemdash \\
-Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & 67.5 & 31.1 & 25.3 & 40.3 & 58.9 & $-3.9$ \ [$-5.3$, $-2.5$] \\
+\textbf{Swin only} & Swin agreement threshold; no VLM & \textemdash & \textbf{69.6} & \textbf{37.8} & \textbf{28.4} & \textbf{44.2} & \textbf{61.8} & \textemdash \ \textit{(reference)} \\
+Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & 60.6 & 25.3 & 21.7 & 34.8 & 52.4 & $-9.4$ \ [$-10.4$, $-8.4$] \\
 \addlinespace
 Triage & Swin + VLM + consistency & LLaVA & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
 Triage &  & Qwen & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
