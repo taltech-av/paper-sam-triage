@@ -22,9 +22,9 @@
 % and the downstream stage, which are what this paper measures and what the
 % companion does not report. Diagram sets are disjoint; no filename is shared.
 %
-% \pending{} marks a downstream number a scheduled run will supply; it renders
-% blue so an empty cell cannot be mistaken for a measured zero. When the runs
-% land: \renewcommand{\pending}[1]{#1} and blank \pendingnote.
+% All downstream rows are final as of 2026-08-15; the ladder is complete and the
+% \pending machinery is gone. Numbers come from bootstrap_miou.py over
+% fusion-training/logs/vlm/frame_metrics/ladder (8 variants, 1,001 test frames).
 % =============================================================================
 \documentclass[journal]{IEEEtran}
 \pdfminorversion=4
@@ -47,12 +47,9 @@
 
 \newcommand{\humancoverage}{1{,}001 of 4{,}110 frames (24.4\,\%), 35{,}984 regions}
 \newcommand{\humansample}{24.4\,\%}
-\newcommand{\pending}[1]{\textcolor{blue}{#1}}
-\newcommand{\pendingnote}{\textcolor{blue}{\emph{Pending: the checkpoints for this table are
-  scheduled; every cell is filled from them and none is reported here in advance.}}}
 \newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
 
-\title{Auditing the Pseudo-Label Pipeline: Human-Referenced Refinement and Downstream Impact in Autonomous Driving}
+\title{Evaluation of Pseudo-Label Triage and Object Discovery for Camera--LiDAR Segmentation}
 
 \author{Toomas Tahves,~\IEEEmembership{}
         Mauro Bellone,~\IEEEmembership{}
@@ -80,7 +77,8 @@ error directions separately, a free segmentation signal dominates zero-shot VLM 
 fraction of the cost, and is worth $+3.9$ mIoU downstream where layering either VLM backend on it
 returns $-3.0$ and $-2.7$. Object discovery is measurably a boundary editor rather than an object
 finder: 78.6\,\% of its candidates are rims on objects already segmented, 61.7\,\% of the pixels it
-adds a human rejected, and it costs $9.4$ mIoU. Cross-model agreement is not a proxy for accuracy
+adds a human rejected, and it costs $9.4$ mIoU --- of which $5.6$ is recovered by discarding rims on
+geometry alone, before any model call. Cross-model agreement is not a proxy for accuracy
 --- scored against humans the two backends' ranking inverts by class, and their aggregate ordering
 is set by the corpus class mix. Deleting the 5.3\,\% of object pixels a human rejected, at fixed
 training-set size, is worth $+2.5$ mIoU: label purity, not verification and not volume, is the
@@ -390,11 +388,7 @@ arbitrated.
 \subsection{Downstream: the Free Signal Is the Only Filtering Stage That Helps}
 
 Table~\ref{tab:ablation} reports the nested ladder, in which each step adds exactly one pipeline
-stage so that any change is attributable to that stage. Every row the argument rests on is final;
-the two full-pipeline rows are \pending{pending} on runs still in progress, and are not filled from
-an earlier campaign scored against a SAM-derived reference.
-\TODO{fill the two \emph{Triage + disc.} rows when the runs land; then blank \texttt{\textbackslash
-pending}/\texttt{\textbackslash pendingnote}.}
+stage so that any change is attributable to that stage.
 
 Applying the Swin agreement threshold to raw SAM proposals is worth $+3.9$ mIoU
 (40.3 $\to$ 44.2, 95\,\% CI $[+2.5, +5.3]$, $P(\Delta\leq0)<10^{-4}$), and the gain is present in
@@ -429,6 +423,13 @@ discovery adds: vehicle IoU falls 9.0 points and sign 12.6, so the added regions
 globally rather than trading one class against another. The deficit is also uniform across weather,
 between 7 and 10 points in every condition, consistent with a mechanism --- coarse upsampled
 regions painted into the labels --- that does not depend on visibility.
+
+Running both stages together costs more than either alone: the full pipeline lands at 34.7 mIoU with
+LLaVA and 35.5 with Qwen, $-9.4$ and $-8.7$ against the free signal, and $-6.4$ and $-5.9$ against
+the same backend's triage-only variant. Discovery therefore dominates the interaction --- adding it
+to a triage variant costs about six points regardless of which backend did the triage --- and the
+two backends remain indistinguishable from each other at the end of the ladder as they were in the
+middle of it (paired difference $-0.7$, CI $[-1.4, +0.1]$).
 
 The discovery rows carry an evaluation caveat the others do not: an object that neither stage ever
 proposed is absent from the human reference, so a model that segments one is penalised. This biases
@@ -510,11 +511,26 @@ claiming only pixels triage left as background --- agreeing with the shipped ann
 per frame against some 10{,}800 added. Discovery adds 10.7\,M pixels to a label set already holding
 28.5\,M object pixels, inflating the object-pixel budget by 37.5\,\%, and 61.7\,\% of what it adds
 is material a human marked as not the object: 23.1\,\% of all object pixels in the resulting
-labels. A contamination of that magnitude is a sufficient --- and measured rather than inferred ---
-explanation for a 9.4-point deficit; what remains unproven is only that it is the \emph{operative}
-one, which a geometry-gated variant would settle. Weighting by pixels moves the balance slightly in
-discovery's favour, genuine recoveries being larger than average and rising from 6.1\,\% of
-candidates to 9.3\,\% of added pixels while edge bleed falls from 52.0\,\% to 47.5\,\%.
+labels. Weighting by pixels moves the balance slightly in discovery's favour, genuine recoveries
+being larger than average and rising from 6.1\,\% of candidates to 9.3\,\% of added pixels while
+edge bleed falls from 52.0\,\% to 47.5\,\%.
+
+\textbf{Gating on geometry recovers most of the deficit, which identifies the contamination as its
+operative cause.} The pixel accounting above is a \emph{sufficient} explanation for the $-9.4$;
+that it is the operative one is a separate claim, and it is testable without a model call or a
+human label. We therefore train the variant the geometry implies: discard every candidate that
+abuts a same-class SAM mask at proposal time --- the 78.6\,\% of the pool that
+Table~\ref{tab:discovery_geometry} shows to be rims --- and paint only what survives. It recovers
+$+5.6$ mIoU against ungated discovery (34.8 $\to$ 40.4, CI $[+4.7, +6.3]$,
+$P(\Delta\leq0)<10^{-4}$), so roughly three fifths of the deficit was the rim contamination and not
+some other property of the added regions. A free geometric test applied before any verification
+buys back more than either VLM backend's triage was worth.
+
+It does not, however, rescue the stage. Gated discovery is still $-3.8$ mIoU against the free
+signal alone (CI $[-4.8, -2.9]$) and is statistically indistinguishable from not running discovery
+at all --- $+0.05$ against raw SAM, CI $[-1.6, +1.6]$. The gate converts a stage that was actively
+harmful into one that is merely not worth its inference budget, which is a real improvement for a
+practitioner already committed to running it and not an argument for adding it.
 
 \input{tables/cleaning_contrast}
 
@@ -566,9 +582,11 @@ $-3.0$ and $-2.7$ mIoU and buys nothing measurable over not filtering at all.
 \textbf{Gate discovery on geometry, which is free, rather than on a second VLM, which is not.}
 The corrective is not a better confirmer but a cheaper filter applied earlier. Whether a candidate
 is a rim is decidable from geometry alone --- does it abut a SAM mask of its own class --- with no
-model call and no human label, so it applies to all 4{,}110 frames. Applied at proposal time it
-costs nothing, it is the axis on which the candidate pool actually separates, and it leaves the
-6.1\,\% of candidates that are genuine recoveries intact.
+model call and no human label, so it applies to all 4{,}110 frames. Trained, it is worth $+5.6$
+mIoU over ungated discovery, more than either backend's triage was worth in either direction, for a
+test that costs nothing. A practitioner committed to running discovery should apply it at proposal
+time. A practitioner who is not should not add the stage: even gated, it does not separate from
+skipping discovery entirely.
 
 \textbf{Spend the freed budget on human verification, targeted by mask rather than by frame.}
 Ranking masks by the free Swin signal reaches 44.0\,\% of all human-rejected masks within the top
@@ -600,8 +618,9 @@ not that it is closer to a neutral ground truth. An object neither SAM nor disco
 is absent from it, so a model that segments one is penalised --- a bias running only against the
 discovery variants, in the direction the candidate-level measurement already establishes. The
 interface records a rejection without its reason, so we cannot report what share turn on boundary
-quality. Finally, the two full-pipeline rows are pending, so the triage$\times$discovery interaction
-is not separately measured; the triage comparison this paper turns on is closed at both levels.
+quality. And the geometry gate is evaluated as a single trained variant on one threshold --- it
+identifies the contamination as the operative cause of the discovery deficit, but we do not sweep
+the ring radius or the class-fold, so the $+5.6$ is one point on a curve we have not mapped.
 
 \section{Conclusion}
 
@@ -623,18 +642,21 @@ geometry to human verdicts shows it recovers 841 genuine objects here, but they 
 it proposes: 78.6\,\% are rims on objects already segmented and two thirds of those rims a human
 rejected, 0.85 recoveries against 9.35 rejected regions per frame. In pixels the contamination is
 sufficient on its own to explain the $-9.4$ mIoU it costs --- 61.7\,\% of what it adds is material a
-human rejected, 23.1\,\% of all object pixels in the resulting labels. The property that separates
-that candidate pool is geometric and free, which is the one clearly actionable fix this audit
-produces.
+human rejected, 23.1\,\% of all object pixels in the resulting labels. That contamination is also the
+\emph{operative} cause and not merely a sufficient one: discarding candidates that abut a same-class
+mask --- a geometric test needing no model call and no human label --- recovers $+5.6$ of the 9.4
+points, more than either VLM backend's triage was worth. It does not make the stage pay, since gated
+discovery still does not separate from skipping discovery altogether, but it identifies where the
+damage came from and it is the one clearly actionable fix this audit produces.
 
 Against all of this, deleting the 5.3\,\% of object pixels a human rejected, at fixed training-set
 size, is worth $+2.5$ mIoU, with a per-class response tracking the per-class deletion dose. On this
 corpus label purity is the binding constraint and human deletion is the cheapest way to buy it.
 Future work follows from the limits reached rather than the successes: a protocol that pins the
-labelling standard rather than more labelling under a drifting one; the geometry-gated discovery
-variant, one training run that would show whether suppressing the contamination recovers the
-deficit; and correction mechanisms that can redraw a boundary, for which confirmed boundary growth
-at 10.8\,\% of object pixels already supplies a target.
+labelling standard rather than more labelling under a drifting one; a sweep of the geometric gate,
+whose single operating point here recovers most of the discovery deficit but which we have not
+mapped as a curve; and correction mechanisms that can redraw a boundary, for which confirmed
+boundary growth at 10.8\,\% of object pixels already supplies a target.
 
 \section*{Acknowledgement}
 Funded by the European Union's Horizon 2020 Programme under grant No.~856602 (Finest Twins) and

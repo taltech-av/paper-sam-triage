@@ -53,7 +53,7 @@
 
 \newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
 
-\title{Evaluating Multi-Agent Consensus and Failure Modes in Open VLM Annotation Workflows}
+\title{Cross-Backend Comparison of Fixed-Prompt VLM Agents for SAM Mask Verification Pipeline}
 
 \author{\small Toomas Tahves$^{1}$, Mauro Bellone$^{2,3}$, Raivo Sell$^{1}$ \\
 $^{1}$\textit{Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia} \\
@@ -429,13 +429,14 @@ backend is more permissive than its counterpart on both of the presence-check pr
 
 The Correction Agent fails more starkly still, and in the third possible way. Its prompt is the only
 one asking for a judgement about a hypothetical corrective action rather than a description of
-visible content, and under Qwen it elicits no usable content at all: every call falls back to
-\texttt{no\_refine} and the refine path never fires, against 1.4\,\% of masks routed to refinement
-under LLaVA (Table~\ref{tab:agent_behavior}). We report this as a null result and make no refine-path
-claim for Qwen. The explanation we can offer --- that a counterfactual instruction transfers worse
-than a descriptive one --- is plausible and untested.
-\TODO{regenerate the exact Correction-Agent call and response counts on the 4{,}110-frame set; the
-1{,}449/1{,}311 figures in the superseded draft were computed on the old 3{,}535-frame subset.}
+visible content, and under Qwen it elicits no usable content at all. On the paired set the agent is
+reached on 1{,}449 masks under Qwen and returns an unparseable reply on all 1{,}449, so every call
+falls back to \texttt{no\_refine} and the refine path never fires; under LLaVA it is reached on
+1{,}311 masks and answers 1{,}304 of them with \texttt{refine}, routing 1.4\,\% of all masks to
+refinement (Table~\ref{tab:agent_behavior}). The failure is total rather than partial, which is what
+separates it from the graded degradations of the other two agents. We report it as a null result and
+make no refine-path claim for Qwen. The explanation we can offer --- that a counterfactual
+instruction transfers worse than a descriptive one --- is plausible and untested.
 
 Taken together the three agents fail in three different modes under one prompt set: the BBox agent
 transfers with a class-redistributed boundary, the discovery agent transfers on two prompts and

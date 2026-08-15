@@ -28,9 +28,9 @@
          same frames, so per-variant marginal CIs overlap far more than the differences themselves and
          understate the separation.
          An interval excluding zero means the variant differs significantly from Swin only.
-         The three VLM-independent rows and both triage rows are final; the two full-pipeline rows
-         are \pending{pending} on runs still in progress and no value is reported for them in
-         advance.}
+         Every row is final. \emph{Geometry-gated disc.}\ discards candidates abutting a same-class
+         SAM mask before they are painted --- a test needing no model call and no human label ---
+         and recovers $+5.6$ mIoU against ungated discovery ($P(\Delta\leq0)<10^{-4}$).}
 \label{tab:ablation}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llc ccccc l}
@@ -41,11 +41,12 @@
 Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & 67.5 & 31.1 & 25.3 & 40.3 & 58.9 & $-3.9$ \ [$-5.3$, $-2.5$] \\
 \textbf{Swin only} & Swin agreement threshold; no VLM & \textemdash & \textbf{69.6} & \textbf{37.8} & \textbf{28.4} & \textbf{44.2} & \textbf{61.8} & \textemdash \ \textit{(reference)} \\
 Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & 60.6 & 25.3 & 21.7 & 34.8 & 52.4 & $-9.4$ \ [$-10.4$, $-8.4$] \\
+Swin + geometry-gated disc. & Discards candidates abutting a same-class mask & \textemdash & 68.2 & 31.6 & 25.8 & 40.4 & 59.5 & $-3.8$ \ [$-4.8$, $-2.9$] \\
 \addlinespace
 Triage & Swin + VLM + consistency & LLaVA & 67.5 & 35.4 & 26.8 & 41.1 & 59.6 & $-3.0$ \ [$-4.5$, $-1.6$] \\
 Triage &  & Qwen & 68.5 & 33.3 & 28.0 & 41.5 & 60.1 & $-2.7$ \ [$-4.1$, $-1.5$] \\
-Triage + disc. & Full pipeline & LLaVA & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
-Triage + disc. &  & Qwen & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{--} & \pending{\textit{pending}} \\
+Triage + disc. & Full pipeline & LLaVA & 60.1 & 25.2 & 22.4 & 34.7 & 52.0 & $-9.4$ \ [$-10.7$, $-8.1$] \\
+Triage + disc. &  & Qwen & 60.5 & 23.7 & 24.4 & 35.5 & 52.2 & $-8.7$ \ [$-9.8$, $-7.7$] \\
 \bottomrule
 \end{tabular}}
 \end{table*}
