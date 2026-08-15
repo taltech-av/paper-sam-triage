@@ -10,5 +10,9 @@ commands.txt
 *.blg
 *.fls
 *.fdb_latexmk
+*.synctex.gz
+*.toc
+*.dvi
+*-eps-converted-to.pdf
 qualitative_candidates/
 human_verified_output

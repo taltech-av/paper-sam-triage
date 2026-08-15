@@ -1,61 +1,65 @@
-\documentclass[conference]{IEEEtran}
-\pdfminorversion=4
-\IEEEoverridecommandlockouts
+\documentclass[a4paper,twoside]{article}
 
-\usepackage{cite}
-\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{epsfig}
+\usepackage{subcaption}
+\usepackage{calc}
+\usepackage{amssymb}
+\usepackage{amstext}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{multicol}
+\usepackage{pslatex}
+\usepackage{apalike}
+\usepackage{algorithm2e}
+\usepackage[bottom]{footmisc}
+%% Additional packages required by this paper, loaded before SCITEPRESS.sty.
 \usepackage{graphicx}
 \usepackage{textcomp}
 \usepackage{xcolor}
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{url}
-\usepackage[compatibility=false]{caption}
-\usepackage{subcaption}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, positioning, shapes, backgrounds}
-\usepackage{pgfplots}
+\usepackage{SCITEPRESS}     % Please add other packages that you may need BEFORE the SCITEPRESS.sty package.
 
 \newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
 
+\begin{document}
+
 \title{Cross-Backend Comparison of Fixed-Prompt VLM Agents for SAM Mask Verification Pipeline}
 
-\author{\small Toomas Tahves$^{1}$, Mauro Bellone$^{2,3}$, Raivo Sell$^{1}$ \\
-$^{1}$\textit{Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia} \\
-$^{2}$\textit{FinEst Centre for Smart Cities, Tallinn University of Technology, Estonia} \\
-$^{3}$\textit{Department of Computer Science and Engineering, Universitas Mercatorum, Rome, Italy}}
+\author{\authorname{Toomas Tahves\sup{1}\orcidAuthor{0009-0008-0050-2146}, Mauro Bellone\sup{2,3}\orcidAuthor{0000-0003-3692-0688} and Raivo Sell\sup{1}\orcidAuthor{0000-0003-1409-0206}}
+\affiliation{\sup{1}Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia}
+\affiliation{\sup{2}FinEst Centre for Smart Cities, Tallinn University of Technology, Estonia}
+\affiliation{\sup{3}Department of Computer Science and Engineering, Universitas Mercatorum, Rome, Italy}
+\email{\{toomas.tahves, mauro.bellone, raivo.sell\}@taltech.ee}
+}
 
-\begin{document}
-\maketitle
+\keywords{Multi-Agent Systems, Vision-Language Models, Prompt Engineering, Annotation Pipelines, Semantic Segmentation, Autonomous Driving.}
 
-\begin{abstract}
-Multi-agent systems built on vision--language models (VLMs) are increasingly used to audit machine
-generated annotations, with each agent given a role, a fixed prompt, and a constrained output
-vocabulary. Such a design implicitly assumes the backend is a replaceable component: swap the model,
-keep the prompts, and expect the same behaviour at a different cost. We test that assumption
-directly. In an annotation system where five agents assess Segment Anything Model proposals over
-driving scenes, we run two open-weight backends --- LLaVA-1.6-34B and Qwen2.5-VL-72B --- across
-4{,}110 frames and 90{,}176 mask proposals under byte-identical prompts and verified-identical
-non-VLM inputs, so any behavioural difference is attributable to the model alone. Portability fails,
-and it fails unevenly. The two backends return the same verdict on only 57.0\,\% of crops. Neither
-is uniformly more selective: relative to LLaVA, Qwen rejects far fewer signs (10.8\,\% vs.\
-26.0\,\%) and cyclists, yet substantially more vehicles (16.3\,\% vs.\ 5.1\,\%) and pedestrians. On
-object discovery the two agree in aggregate, 82.4\,\% against 83.9\,\%, while the entire divergence
-concentrates in the single prompt requiring a three-way discrimination rather than a presence check,
-where confirmation collapses from 85.9\,\% to 45.3\,\% --- a 41-point deficit on the two
-safety-critical classes that one aggregate rate per model would have hidden entirely. One agent's
-prompt fails to transfer outright, returning no content at all. We argue that portability validation
-must be per-agent and per-class, report response provenance next to every rate so a degraded server
-cannot be mistaken for a sceptical model, and quantify the $3.2\times$ deployment cost the larger
-backend carries for a different annotation distribution rather than a better one.
-\end{abstract}
+\abstract{Multi-agent systems built on vision-language models (VLMs) are increasingly used to audit
+machine-generated annotations, each agent given a role, a fixed prompt, and a constrained output
+vocabulary. Such a design assumes the backend is a replaceable component: swap the model, keep the
+prompts, and expect the same behaviour at a different cost. We test that assumption. In a system
+where five agents assess Segment Anything Model proposals over driving scenes, we run two open-weight
+backends, LLaVA-1.6-34B and Qwen2.5-VL-72B, across 4{,}110 frames and 90{,}176 mask proposals under
+byte-identical prompts and verified-identical non-VLM inputs, so any behavioural difference is
+attributable to the model alone. Portability fails, and it fails unevenly. The two backends return
+the same verdict on only 57.0\,\% of crops, and neither is uniformly more selective: relative to
+LLaVA, Qwen rejects far fewer signs (10.8\,\% vs.\ 26.0\,\%) and cyclists, yet more vehicles
+(16.3\,\% vs.\ 5.1\,\%) and pedestrians. On object discovery the two agree in aggregate, 82.4\,\%
+against 83.9\,\%, while the entire divergence concentrates in the single prompt requiring a
+three-way discrimination rather than a presence check, where confirmation collapses from 85.9\,\% to
+45.3\,\% --- a 41-point deficit on two safety-critical classes that one aggregate rate per model
+would hide. One agent's prompt does not transfer at all, eliciting no usable response. Portability
+validation must therefore be per-agent and per-class, with response provenance reported next to every
+rate so a degraded server is not mistaken for a sceptical model.}
 
-\begin{IEEEkeywords}
-multi-agent systems, vision--language models, prompt engineering, annotation pipelines, semantic
-segmentation, autonomous driving
-\end{IEEEkeywords}
+\onecolumn \maketitle \normalsize \setcounter{footnote}{0} \vfill
 
-\section{Introduction}
+\section{\uppercase{Introduction}}
+\label{sec:introduction}
 
 Delegating judgement to a language model has become a standard component of data pipelines. The
 LLM-as-judge pattern~\cite{zheng2023judging} assigns a model a narrow evaluative role, constrains
@@ -98,7 +102,7 @@ The agent implementations, the verbatim prompts, and the stored responses every 
 computed from are released as open
 source.\footnote{\url{https://github.com/taltech-av/paper-vlm-annotation-pipeline}}
 
-\section{Related Work}
+\section{\uppercase{Related Work}}
 
 \textbf{Language models as delegated judges.} The LLM-as-judge
 paradigm~\cite{zheng2023judging,wu2023llmjudge} shows that language models can evaluate other
@@ -141,7 +145,7 @@ replaced.
     \label{fig:architecture}
 \end{figure}
 
-\section{The Multi-Agent Annotation System}
+\section{\uppercase{The Multi-Agent Annotation System}}
 \label{sec:system}
 
 \subsection{Agent Roles and Output Contracts}
@@ -215,7 +219,7 @@ answered rate and 100\,\%, giving
 for \emph{any} run, whatever its default share. We use this bound below to establish a direction
 without needing the unrecoverable half of the measurement.
 
-\section{Corpus}
+\section{\uppercase{Corpus}}
 \label{sec:corpus}
 
 The system runs over the Zenseact Open Dataset (ZOD)~\cite{alibeigi2023zod}. A prior annotation
@@ -251,7 +255,7 @@ downstream use of these annotations must respect.
 \input{tables/splits}
 \input{tables/dataset_distributions}
 
-\section{Comparison Protocol}
+\section{\uppercase{Comparison Protocol}}
 \label{sec:protocol}
 
 Two open-weight backends are served via Ollama on a single A100-80GB: LLaVA-1.6-34B~\cite{liu2024llava}
@@ -296,7 +300,7 @@ shows no such degradation on the same frames, so this is a property of the deplo
 images --- which is precisely why a verdict rate reported without provenance is not safe to read as
 model behaviour.
 
-\section{Results}
+\section{\uppercase{Results}}
 \label{sec:results}
 
 \subsection{What the Agents Actually Decide}
@@ -490,7 +494,7 @@ against the signals that produced the error, and we do not claim it here.
     \label{fig:limitations}
 \end{figure}
 
-\section{Conclusion}
+\section{\uppercase{Conclusion}}
 
 We treated the VLM backend of a multi-agent annotation system as the experimental variable, holding
 prompts and every non-model input fixed across 4{,}110 frames and 90{,}176 mask proposals. Fixed
@@ -512,11 +516,24 @@ spurious account of a model's character until the raw responses were re-parsed. 
 inference premium of the larger backend bought a different annotation distribution rather than a
 better one, and it did not buy portability.
 
-\section*{Acknowledgement}
-Funded by the European Union's Horizon 2020 Programme under grant No.~856602 (Finest Twins) and
-Horizon Europe under grant No.~101135988 (PLIADES).
+\section*{\uppercase{Acknowledgements}}
 
-\bibliographystyle{IEEEtran}
-\bibliography{references}
+\begin{itemize}
+  \item \textbf{Conflicts of Interest:} The authors have no conflicts of interest or competing
+  interests to declare in the context of this paper.
+  \item \textbf{Financial and other Support:} Funded by the European Union's Horizon 2020 Programme
+  under grant No.~856602 (Finest Twins) and Horizon Europe under grant No.~101135988 (PLIADES).
+  \item \textbf{Data Sharing:} The agent implementations, the verbatim prompts, and the stored
+  model responses every rate in this paper is computed from are available at
+  \url{https://github.com/taltech-av/paper-vlm-annotation-pipeline}.
+  \item \textbf{AI Tools:} Claude Code (Anthropic) was used to assist with implementing the
+  annotation pipeline and its analysis scripts, and with drafting and editing the text of this
+  paper. All experiments were designed and run by the authors, and every result, figure, and claim
+  reported here was verified by the authors, who take full responsibility for the content.
+\end{itemize}
+
+\bibliographystyle{apalike}
+{\small
+\bibliography{references}}
 
 \end{document}
