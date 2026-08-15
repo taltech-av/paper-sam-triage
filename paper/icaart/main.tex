@@ -1,38 +1,3 @@
-% =============================================================================
-% ICAART 2027 submission. Target: 6 pages.
-%
-% !! FORMAT !! This is drafted in two-column IEEEtran so it compiles here. ICAART
-% is a SCITEPRESS venue and requires SCITEPRESS.cls (single column, apalike bib).
-% Before submission: download the ICAART 2027 author kit, swap \documentclass and
-% the bibliography style, and re-fit. Single-column will change the page count
-% materially, so treat the current page number as indicative only.
-%
-% This paper is the SYSTEM + CORPUS half of the split. It owns:
-%   · the five-agent architecture, the output contracts and the safe-default policy
-%   · the corpus: partition construction, split protocol, class distributions
-%   · the controlled cross-backend comparison (LLaVA-1.6-34B vs Qwen2.5-VL-72B),
-%     scored model-against-model -- which is all an agreement statistic can settle
-%   · prompt portability, per-agent and per-class
-%   · the serving-fault disclosure and the response-provenance decomposition
-%   · deployment cost, and the qualitative behaviour of the triage rule
-%
-% It does NOT own: the human reference construction, the purity/volume analysis,
-% the downstream mIoU ladder, the discovery geometry decomposition, the cleaning
-% contrast, or review targeting. Nor does it own the cross-model comparison scored
-% AGAINST HUMANS -- that inverts by class and is a headline of \cite{audit}. Keep
-% the distinction sharp: here the two backends are compared to each other, and the
-% paper says so.
-%
-% Asset sets are disjoint from \cite{audit} by construction -- tables, photo figures
-% AND diagrams. This paper draws backend_substitution (what is shared vs what forks)
-% and pipeline_end_to_end (agent execution order); \cite{audit} draws
-% architecture_overview (where the audit attaches) and candidate_geometry. There is
-% no longer a filename shared between the two directories.
-%
-% ALL NUMBERS BELOW COME FROM tables/*.tex, which compare_models.py regenerated on
-% the full 4,110-frame / 90,176-mask paired set. Do not reintroduce figures from
-% the superseded 3,535-frame draft.
-% =============================================================================
 \documentclass[conference]{IEEEtran}
 \pdfminorversion=4
 \IEEEoverridecommandlockouts
@@ -116,8 +81,7 @@ difference traces to the VLM, and we verify the non-VLM inputs were bit-identica
 Our contributions are as follows. We describe an annotation system whose agent roles, output
 contracts, and default-substitution policy are explicit enough that cross-backend differences can be
 attributed rather than merely observed, together with the driving corpus it runs over and the
-partition and split protocol both this study and its companion~\cite{audit} rest on. We report a
-controlled portability study over 90{,}176 mask
+partition and split protocol it rests on. We report a controlled portability study over 90{,}176 mask
 proposals and 55{,}256 discovery candidates showing that fixed prompts transfer neither uniformly
 across agents nor uniformly across classes, and that a per-model aggregate rate --- the statistic
 such comparisons usually report --- would have scored the two backends as near-equivalent on the
@@ -127,8 +91,9 @@ degraded backend look like a sceptical one, and we quantify the deployment cost 
 against the annotation distribution it actually produces.
 
 Whether any of these agents \emph{should} be deployed --- each signal scored against human verdicts,
-with downstream segmentation effect --- is a separate study~\cite{audit}. Here the question is
-narrower and prior to both: given that such a system is built, what changes when its backend does?
+with downstream segmentation effect --- is a separate question, and one this comparison cannot
+settle. Ours is narrower and prior to it: given that such a system is built, what changes when its
+backend does?
 The agent implementations, the verbatim prompts, and the stored responses every rate below is
 computed from are released as open
 source.\footnote{\url{https://github.com/taltech-av/paper-vlm-annotation-pipeline}}
@@ -280,8 +245,8 @@ divided between test and training. Because night-rain and snow are under-represe
 of 40 frames per weather category is enforced in the test set, which raises the effective test ratio
 for those conditions only. Table~\ref{tab:splits} gives the resulting sizes. The splits are not
 exercised by this paper, which trains nothing --- both runs annotate the same frames and are compared
-to each other --- but they define the partition boundaries the companion study~\cite{audit} trains
-and evaluates over, and are reported here so that both papers rest on one documented corpus.
+to each other --- but they are reported here because they define the partition boundaries any
+downstream use of these annotations must respect.
 
 \input{tables/splits}
 \input{tables/dataset_distributions}
@@ -318,6 +283,18 @@ strikingly sceptical discovery profile for the larger model which, on inspection
 server returning empty replies that the parser folded into declines. Pooling those cases is what made
 a serving fault look like a behavioural trait, and we now report the provenance decomposition next to
 every rate.
+
+\textbf{The fault, and what it cost.} On this serving stack the larger backend intermittently stops
+emitting a stop token and returns content-free replies, at a rate that rises with sustained call
+volume rather than with elapsed time. The run reported here is an instrumented rerun guarded by a
+health monitor that tracks unparseable replies in a sliding window and aborts when it saturates,
+discarding the in-flight frame rather than writing it dirty, then resuming after a model reload.
+Retry and reload traffic from those episodes is included in the deployment cost reported in
+Section~\ref{sec:results}, which is therefore a deployed rather than a fault-free figure, and the 25
+frames excluded from the corpus are the residue the monitor could not clear. The smaller backend
+shows no such degradation on the same frames, so this is a property of the deployment and not of the
+images --- which is precisely why a verdict rate reported without provenance is not safe to read as
+model behaviour.
 
 \section{Results}
 \label{sec:results}
@@ -403,9 +380,12 @@ labels, and does so in a direction that the aggregate conceals.
 
 \input{tables/agent_performance}
 
-Table~\ref{tab:agent_performance} scores each backend against the Quality Agent's verdict, which is
-a noisy reference rather than ground truth but is identical for both runs and therefore ranks them
-on one fixed yardstick. LLaVA is the balanced judge (precision 72.0, recall 71.1, F1 71.5) and Qwen
+Table~\ref{tab:agent_performance} scores each backend against the Quality Agent's verdict. That
+verdict is not ground truth and the table should not be read as one backend being more correct than
+the other --- it is a second automated judge, and an agreement statistic between two such judges
+cannot say which is right. What it is good for is that it is bit-identical for both runs, so it
+measures how far each backend's decision boundary sits from one fixed reference. LLaVA is the
+balanced judge (precision 72.0, recall 71.1, F1 71.5) and Qwen
 the higher-recall, lower-precision one (69.0, 77.8, F1 73.1), consistent with its verdict
 distribution. Restricting Qwen to answered masks raises precision to 75.6 and accuracy to 67.5,
 which quantifies how much of its apparent permissiveness was the default substitution rather than
@@ -452,7 +432,7 @@ Table~\ref{tab:timing} reports deployment cost. The BBox agent dominates, at 3.5
 LLaVA against 11.39\,s for Qwen, issued once per mask, so per-mask latency scales roughly with model
 size. Annotating the 4{,}110 frames took 132.3 GPU-hours with LLaVA against 426.9 with Qwen, a
 $3.2\times$ increase, or 33.1 against 106.7 wall-clock hours at four concurrent frame workers. The
-Qwen figure is a deployed rather than a fault-free cost: it includes retry and reload traffic from
+Qwen figure is a deployed rather than a fault-free cost: it includes the retry and reload traffic of
 the monitor-triggered restarts described in Section~\ref{sec:protocol}. Estimated VRAM is
 $\sim$22\,GB against $\sim$51\,GB, both within a single A100-80GB.
 
@@ -460,7 +440,7 @@ Against that premium, the larger backend's verdicts are less selective rather th
 discovery confirmation rate is marginally lower in aggregate while differing by 41 points on one
 prompt, and one of its three agent prompts does not function. The $3.2\times$ cost buys a different
 annotation distribution, not a better one on any axis measured here. Whether either backend's triage
-is worth its cost against a human reference is the question of~\cite{audit}; the narrower point
+is worth its cost at all is a question only a human reference can settle; the narrower point
 available from this comparison alone is that the cost does not purchase portability.
 
 \subsection{Two Weaknesses of the Rule Itself}
@@ -478,7 +458,8 @@ Swin agreement and LiDAR support to near zero at once through one shared physica
 solid-surface fraction, defeating a two-of-three concordance requirement rather than being caught by
 it --- and in both cases the BBox agent had judged the object \texttt{valid}. Both are correctable
 --- exempting \texttt{background} from unilateral rejection when Swin agreement is high, and making
-the LiDAR threshold class-aware --- and~\cite{audit} evaluates the repair against human verdicts.
+the LiDAR threshold class-aware --- but whether either repair is a net improvement cannot be decided
+against the signals that produced the error, and we do not claim it here.
 
 \begin{figure}[t]
     \centering
