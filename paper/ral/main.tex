@@ -320,9 +320,11 @@ Zero-shot verification at this scale is not a cheap approximation of human verif
 \textbf{Gate discovery on geometry, which is free, rather than on a second VLM, which is not.} The corrective is not a better confirmer but a cheaper filter applied earlier: whether a candidate is a rim is decidable from geometry alone, with no model call and no human label, and trained it is worth $+5.6$ mIoU over ungated discovery --- more than either backend's triage was worth in either direction.
 A practitioner already committed to discovery should apply it at proposal time; one who is not should not add the stage, since even gated it does not separate from skipping it entirely.
 
-\textbf{Spend the freed budget on human verification, targeted by mask rather than by frame.} Ranking masks by the free Swin signal reaches 44.0\,\% of all human-rejected masks within the top 20\,\% of masks, against 20.0\,\% for random order; adding the large VLM as a \emph{ranker} rather than a decision-maker raises that only to 47.1\,\% and only at small budgets, at one crop call per mask.
+\textbf{Spend the freed budget on human verification, targeted by mask rather than by frame.} Ranking masks by the free Swin signal reaches 44.0\,\% of all human-rejected masks within the top 20\,\% of masks, against 20.0\,\% for random order (Table~\ref{tab:review_targeting}); adding the large VLM as a \emph{ranker} rather than a decision-maker raises that only to 47.1\,\% and only at small budgets, at one crop call per mask.
 Spending the budget on whole frames is far weaker --- 88\,\% of frames hold at least one rejected mask, so frame-level ranking barely separates (25.2\,\% vs.\ 19.9\,\% random at 20\,\%).
 Errors are spread thin across frames and concentrated within them, which argues for mask-level review queues, and class priority follows the same evidence: the low-Swin subset of the cyclist and pedestrian classes is 55\,\% of their masks while holding 81\,\% of their errors.
+
+\input{tables/review_targeting}
 
 \textbf{A confirm-or-reject stage cannot repair a boundary.} The structural limit behind all of the above is that every automated stage here can only delete a mask or add a coarse one, with no mechanism to redraw a boundary.
 Pipelines aimed at pseudo-label quality should therefore invest in correction mechanisms, whether SAM re-prompting or human redrawing, rather than in further verification rules, whose ceiling is set by the 20.4\,\% of proposals that are wrong to begin with.
