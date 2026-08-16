@@ -363,7 +363,7 @@ Third, discovery is compared on ground that is fully measured on both sides.
 Both runs store each discovery response verbatim, so we re-derive the outcome for both with a single parser and separate four cases the stored \texttt{confirmed} flag collapses into one: the model named a class the prompt offered, the model declined (\texttt{other}, a genuine negative), the model replied outside the offered vocabulary, or no content was returned at all.
 Confirmation rates are then taken over answered candidates only.
 Pooling those cases is what made a degraded server look like a sceptical model.
-Separating them also distinguishes model-side non-answering (out-of-vocabulary text: 1.8\,\% for LLaVA, 0.0\,\% for Qwen) from server-side non-answering (content-free replies: 0.0\,\% and 2.9\,\%), which have different causes and different interpretations.
+Separating them also distinguishes model-side non-answering (out-of-vocabulary text: 1.7\,\% for LLaVA, 0.0\,\% for Qwen) from server-side non-answering (content-free replies: 0.0\,\% for both on the instrumented rerun, the health monitor having cleared the episodes that the earlier campaign pooled into declines), which have different causes and different interpretations.
 
 \paragraph{The serving fault, and what it cost}
 On this serving stack the larger backend intermittently stops emitting a stop token and returns content-free replies, at a rate that rises with sustained call volume rather than with elapsed time.

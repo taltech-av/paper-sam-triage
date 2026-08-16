@@ -3,7 +3,7 @@
 % llava_34b: 4110 frames on disk; qwen2.5vl_72b_v2: 4110 frames on disk.
 \begin{table}[t]
 \centering
-\caption{VLM agent behaviour on the 4{,}110 flagged frames both models completed (90{,}176 SAM masks, identical for both; Swin agreement and LiDAR consistency are VLM-independent and verified bit-identical across the two runs). Triage outcomes are recomputed offline under the current deterministic rule for both models. BBox rates are \emph{as-recorded}: they include masks whose verdict is a \textsc{safe\_default} substitution after an unparseable reply, which is what the pipeline acted on. Discovery outcomes are re-derived from the raw responses stored by both runs with a single parser, separating a model declining a candidate (\texttt{other}) from a reply the parser could not read at all; the hit rate is over answered candidates only. ``Human objects added'' counts confirmed cyclist and pedestrian candidates.}
+\caption{VLM agent behaviour on the 4{,}110 flagged frames both models completed (90{,}176 SAM masks, identical for both; Swin agreement and LiDAR consistency are VLM-independent and verified bit-identical across the two runs). Triage outcomes are recomputed offline under the current deterministic rule for both models. \emph{Retained, flagged} pools the two non-destructive outcomes, human review and refinement: both keep every pixel --- only rejection deletes --- and the agent separating them returns no usable content on one backend, so the split is not a cross-model measurement. BBox rates are \emph{as-recorded}: they include masks whose verdict is a \textsc{safe\_default} substitution after an unparseable reply, which is what the pipeline acted on. Discovery outcomes are re-derived from the raw responses stored by both runs with a single parser, separating a model declining a candidate (\texttt{other}) from a reply the parser could not read at all; the hit rate is over answered candidates only. ``Human objects added'' counts confirmed cyclist and pedestrian candidates.}
 \label{tab:agent_behavior}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lcc}
@@ -13,8 +13,7 @@
 \multicolumn{3}{l}{\textit{Triage outcomes (current rule, recomputed)}} \\
 Accept & 43.2\% & 47.3\% \\
 Reject & 20.9\% & 17.3\% \\
-Human review & 34.4\% & 35.4\% \\
-Refine & \phantom{0}1.4\% & \phantom{0}0.0\% \\
+Retained, flagged & 35.8\% & 35.4\% \\
 \addlinespace
 \multicolumn{3}{l}{\textit{BBox VLM verdicts (as-recorded)}} \\
 Valid (object present) & 62.1\% & 70.9\% \\

@@ -73,6 +73,24 @@ SEP2 = "═" * 74
 CLASSES = ["vehicle", "sign", "cyclist", "pedestrian"]
 BBOX_VERDICTS = ["valid", "invalid", "background"]
 TRIAGE_OUTCOMES = ["accept", "reject", "human_review", "refine"]
+
+# What a CROSS-MODEL comparison may report. `refine` and `human_review` are
+# pooled because the agent that separates them — CorrectionAgent — answers on
+# llava and fails on every qwen call, so the split is a property of that failure
+# rather than of the model. Pooling is lossless for annotation outcomes:
+# annotation_writer.py zeroes pixels only on `reject`, so refine and
+# human_review write byte-identical labels. Keep TRIAGE_OUTCOMES for the raw
+# per-run breakdown; the CORRECTION AGENT block reports the split itself.
+TRIAGE_REPORTED = ["accept", "reject", "retained_flagged"]
+
+
+def triage_reported(s: dict, outcome: str) -> int:
+    """Count for a reported (pooled) triage outcome."""
+    if outcome == "retained_flagged":
+        return s["triage"].get("human_review", 0) + s["triage"].get("refine", 0)
+    return s["triage"].get(outcome, 0)
+
+
 DISC_CLASSES = {1: "vehicle", 2: "sign", 3: "human"}
 
 # VLM-independent per-mask signals. Both runs compute these from the same Swin
@@ -469,10 +487,12 @@ def print_report(names, stats, dstats, refs, agree, times, ident, args):
     print(f"\n  TRIAGE OUTCOMES  (recomputed under the current rule for both runs)")
     print(SEP)
     print(f"  {'outcome':32s} {a[:W]:>{W}} {b[:W]:>{W}}")
-    for o in TRIAGE_OUTCOMES:
+    for o in TRIAGE_REPORTED:
         print(f"  {o:32s} "
-              f"{pct(stats[a]['triage'].get(o,0), stats[a]['total']):>{W}} "
-              f"{pct(stats[b]['triage'].get(o,0), stats[b]['total']):>{W}}")
+              f"{pct(triage_reported(stats[a], o), stats[a]['total']):>{W}} "
+              f"{pct(triage_reported(stats[b], o), stats[b]['total']):>{W}}")
+    print(f"  retained_flagged pools human_review and refine: both keep every pixel,")
+    print(f"  and the agent that splits them answers on only one of the two backends.")
 
     print(f"\n  PER-CLASS REJECTION RATE")
     print(SEP)
@@ -606,7 +626,10 @@ def write_latex(path: Path, names, stats, dstats, ident, coverage) -> None:
              "Swin agreement and LiDAR consistency are VLM-independent and verified "
              "bit-identical across the two runs). "
              "Triage outcomes are recomputed offline under the current deterministic rule "
-             "for both models. "
+             "for both models. \\emph{Retained, flagged} pools the two non-destructive "
+             "outcomes, human review and refinement: both keep every pixel --- only "
+             "rejection deletes --- and the agent separating them returns no usable "
+             "content on one backend, so the split is not a cross-model measurement. "
              "BBox rates are \\emph{as-recorded}: they include masks whose verdict is a "
              "\\textsc{safe\\_default} substitution after an unparseable reply, which is "
              "what the pipeline acted on. "
@@ -624,9 +647,9 @@ def write_latex(path: Path, names, stats, dstats, ident, coverage) -> None:
 
     L.append("\\multicolumn{3}{l}{\\textit{Triage outcomes (current rule, recomputed)}} \\\\")
     for label, key in (("Accept", "accept"), ("Reject", "reject"),
-                       ("Human review", "human_review"), ("Refine", "refine")):
-        L.append(f"{label} & {p(stats[a]['triage'].get(key,0), stats[a]['total'])} "
-                 f"& {p(stats[b]['triage'].get(key,0), stats[b]['total'])} \\\\")
+                       ("Retained, flagged", "retained_flagged")):
+        L.append(f"{label} & {p(triage_reported(stats[a], key), stats[a]['total'])} "
+                 f"& {p(triage_reported(stats[b], key), stats[b]['total'])} \\\\")
 
     L.append("\\addlinespace")
     L.append("\\multicolumn{3}{l}{\\textit{BBox VLM verdicts (as-recorded)}} \\\\")
