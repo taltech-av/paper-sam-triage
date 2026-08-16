@@ -281,7 +281,7 @@ What sinks the stage is the exchange rate rather than an absence of finds: 0.85 
 
 \textbf{In pixels, which is what the loss sees, the contamination is severe.} Candidate counts and painted pixels are different currencies: a rim on a bus and a rim on a distant sign are one candidate each.
 We therefore re-derive what every candidate actually painted by reproducing the pipeline's own operation --- the $384{\times}384$ component map upsampled to full resolution, claiming only pixels triage left as background --- which agrees with the shipped annotation to 108\,px per frame against some 10{,}800 added.
-Discovery adds 10.7\,M pixels to a set already holding 28.5\,M object pixels, inflating the object-pixel budget by 37.5\,\%, and 61.7\,\% of what it adds is material a human marked as not the object: 23.1\,\% of all object pixels in the resulting labels.
+Discovery adds 10.7\,M pixels to a set already holding 28.5\,M object pixels, inflating the object-pixel budget by 37.5\,\%, and 61.7\,\% of what it adds is material a human marked as not the object --- 6.6\,M px, equal to 23.1\,\% of the object pixels the set held before discovery ran, or one pixel in six of the labels it produces.
 Weighting by pixels moves the balance slightly in discovery's favour, genuine recoveries being larger than average and rising from 6.1\,\% of candidates to 9.3\,\% of added pixels while edge bleed falls from 52.0\,\% to 47.5\,\%.
 
 \textbf{Gating on geometry recovers most of the deficit, which identifies the contamination as its operative cause.} The pixel accounting above is a \emph{sufficient} explanation for the $-9.4$; that it is the operative one is a separate claim, and it is testable without a model call or a human label.
