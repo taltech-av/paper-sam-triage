@@ -36,6 +36,7 @@ When such a backend is replaced, that behaviour changes is not in question; what
 We give a protocol for measuring it and apply it to a SAM mask-verification pipeline on the Zenseact Open Dataset: two open-weight backends, LLaVA-1.6-34B and Qwen2.5-VL-72B, over the same 4{,}110 driving frames and 90{,}176 mask proposals under byte-identical prompts, every non-VLM signal held bit-identical, the comparison paired at mask level, the triage rule recomputed offline under one revision for both runs, and each response's provenance recorded so a serving fault cannot be read as model scepticism.
 The protocol localises the change instead of summarising it.
 The backends agree on only 57.0\,\% of mask verdicts, and neither is uniformly more selective: relative to LLaVA, Qwen rejects far fewer signs (10.8\,\% vs.\ 26.0\,\%) and cyclists, yet more vehicles (16.3\,\% vs.\ 5.1\,\%) and pedestrians, so substitution changes \emph{which} classes lose labels rather than how many.
+In the labels the pipeline actually writes, that lands as 18.8\,\% of masks --- 7.5\,M object pixels --- retained by one backend and deleted by the other.
 The effect is agent-specific and can vanish in aggregate: on object discovery the two confirm at almost the same pooled rate, 82.4\,\% against 83.9\,\%, while the whole divergence sits in the one prompt requiring a three-way discrimination rather than a presence check, where confirmation falls from 85.9\,\% to 45.3\,\%, a 41-point deficit on the two safety-critical classes.
 Portability must therefore be validated per-agent and per-class on identical inputs, with response provenance reported next to every rate.}
 
@@ -268,6 +269,11 @@ The more consequential finding is that this is not a uniform relaxation.
 Relative to LLaVA, Qwen rejects far fewer signs (10.8\,\% vs.\ 26.0\,\%) and cyclists (33.3\,\% vs.\ 46.5\,\%), yet substantially \emph{more} vehicles (16.3\,\% vs.\ 5.1\,\%) and pedestrians (35.4\,\% vs.\ 16.9\,\%).
 The verdict profile is redistributed across classes rather than shifted along a single permissiveness axis, so neither model is uniformly more selective and a single aggregate acceptance rate does not predict which classes a backend will protect.
 For a safety-critical annotation task this is the difference that matters: substituting the backend changes \emph{which} classes lose labels, and does so in a direction that the aggregate conceals.
+
+That disagreement propagates into the labels, which is where a downstream consumer meets it.
+Recomputed under one rule, 40.3\,\% of masks receive a different triage outcome under the two backends, and 18.8\,\% of them --- 16{,}985 masks carrying 7.5\,M object pixels --- are retained by one backend and deleted by the other.
+Because only rejection is destructive, that is the quantity inherited by anything trained on these annotations: close to one mask in five is present in one annotation set and absent from the other, decided by which backend happened to be configured.
+We do not measure what that costs a trained model, which needs a reference this comparison does not have; we measure how much of the label set is at stake.
 
 \input{tables/agent_performance}
 

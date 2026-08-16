@@ -332,6 +332,35 @@ def bbox_agreement(runs: dict[str, dict], frames: list[str]) -> dict:
                 n_answered=total_ans)
 
 
+def label_divergence(runs: dict[str, dict], frames: list[str]) -> dict:
+    """How much of the annotation set a backend substitution moves.
+
+    Verdict agreement is an agent-level statistic; this is the consequence a
+    downstream consumer inherits. Outcomes are recomputed under one rule and
+    pooled to accept / reject / retained, since only `reject` deletes pixels —
+    so `flipped` counts masks present in one annotation set and absent from the
+    other.
+    """
+    names = list(runs)
+    a, b = runs[names[0]], runs[names[1]]
+    n = moved = flipped = pixels = 0
+    for fid in frames:
+        mb = {m["mask_id"]: m for m in b[fid]["masks"]}
+        for m in a[fid]["masks"]:
+            other = mb.get(m["mask_id"])
+            if other is None:
+                continue
+            da, db = recomputed_triage(m), recomputed_triage(other)
+            da = "retained" if da in ("refine", "human_review") else da
+            db = "retained" if db in ("refine", "human_review") else db
+            n += 1
+            moved += da != db
+            if (da == "reject") != (db == "reject"):
+                flipped += 1
+                pixels += m.get("pixel_count") or 0
+    return dict(n=n, moved=moved, flipped=flipped, pixels=pixels)
+
+
 def timing(records: dict[str, dict], frames: list[str]) -> dict:
     """Per-mask BBox latency and per-frame wall time from stored timings."""
     bbox_calls, frame_total, frame_triage, frame_disc = [], [], [], []
@@ -384,7 +413,7 @@ def tex_num(v):
     return f"{v:,}".replace(",", "{,}")
 
 
-def print_report(names, stats, dstats, refs, agree, times, ident, args):
+def print_report(names, stats, dstats, refs, agree, diverge, times, ident, args):
     a, b = names
     W = 22
 
@@ -493,6 +522,17 @@ def print_report(names, stats, dstats, refs, agree, times, ident, args):
               f"{pct(triage_reported(stats[b], o), stats[b]['total']):>{W}}")
     print(f"  retained_flagged pools human_review and refine: both keep every pixel,")
     print(f"  and the agent that splits them answers on only one of the two backends.")
+
+    print(f"\n  LABEL-SET DIVERGENCE  (outcomes pooled to accept/reject/retained)")
+    print(SEP)
+    print(f"  {'masks compared':40s} {diverge['n']:>10}")
+    print(f"  {'different triage outcome':40s} {diverge['moved']:>10}  "
+          f"{pct(diverge['moved'], diverge['n'])}")
+    print(f"  {'retained by one, deleted by the other':40s} {diverge['flipped']:>10}  "
+          f"{pct(diverge['flipped'], diverge['n'])}")
+    print(f"  {'object pixels at stake':40s} {diverge['pixels']/1e6:>9.1f}M")
+    print(f"  Only `reject` deletes, so the second row is the share of the mask set")
+    print(f"  that exists in one annotation set and not in the other.")
 
     print(f"\n  PER-CLASS REJECTION RATE")
     print(SEP)
@@ -858,9 +898,10 @@ def main() -> None:
                     answered=swin_reference(runs[n], frames, answered_only=True))
             for n in names}
     agree = bbox_agreement(runs, frames)
+    diverge = label_divergence(runs, frames)
     times = {n: timing(runs[n], frames) for n in names}
 
-    print_report(names, stats, dstats, refs, agree, times, ident, args)
+    print_report(names, stats, dstats, refs, agree, diverge, times, ident, args)
     if args.latex:
         write_latex(args.latex, names, stats, dstats, ident, coverage)
     if args.latex_dir:

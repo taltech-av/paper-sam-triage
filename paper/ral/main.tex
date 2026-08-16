@@ -209,7 +209,9 @@ Table~\ref{tab:ablation} reports the nested ladder, in which each step adds exac
 Applying the Swin agreement threshold to raw SAM proposals is worth $+3.9$ mIoU (40.3 $\to$ 44.2, 95\,\% CI $[+2.5, +5.3]$, $P(\Delta\leq0)<10^{-4}$), and the gain is present in all three classes and all five weather conditions.
 It is largest on signs ($+6.8$ IoU) and smallest on vehicles ($+2.1$), matching where SAM's proposals are worst relative to their pixel volume.
 One forward pass per frame, at $<$0.01\,s per mask, buys the entire measurable filtering effect in this study.
-Broken down by weather the margin neither widens monotonically with degradation nor stays flat ($+3.8$ day-fair, $+7.0$ night-fair, $+3.3$ night-rain), so a filter that mainly removed low-visibility label noise is not what these labels contain; the adverse strata are small (29--146 frames).
+Broken down by weather (Table~\ref{tab:weather_miou}) the margin neither widens monotonically with degradation nor stays flat ($+3.8$ day-fair, $+7.0$ night-fair, $+3.3$ night-rain), so a filter that mainly removed low-visibility label noise is not what these labels contain; the adverse strata are small (29--146 frames), which is why the overall comparison is read off the pooled bootstrap rather than off a mean over the five columns.
+
+\input{tables/weather_miou}
 
 \textbf{Does VLM triage add anything over Swin alone?
 No --- it subtracts.} Both triage variants land significantly below the free signal they are layered on: 41.1 mIoU with LLaVA-1.6-34B ($-3.0$, CI $[-4.5, -1.6]$) and 41.5 with Qwen2.5-VL-72B ($-2.7$, CI $[-4.1, -1.5]$), both with $P(\Delta\geq0)<10^{-4}$ --- three quarters of the $+3.9$ the threshold had bought, given back.
@@ -221,7 +223,7 @@ A stage costing 109--352\,s of GPU time per frame had to beat 44.2 mIoU to have 
 
 \textbf{Discovery is strongly negative, and the human pass had already bounded it.} Adding all Swin-detected discoveries to the Swin-filtered labels costs $-9.4$ mIoU (44.2 $\to$ 34.8, CI $[-10.4, -8.4]$) --- more than twice the size of the filtering gain, and negative even against the unfiltered raw-SAM baseline ($-5.5$, CI $[-6.8, -4.1]$).
 The damage is not confined to the classes discovery adds: vehicle IoU falls 9.0 points and sign 12.6, so the added regions degrade the model globally rather than trading one class against another.
-The deficit is also uniform across weather, between 7 and 10 points in every condition, consistent with a mechanism --- coarse upsampled regions painted into the labels --- that does not depend on visibility.
+The deficit is also uniform across weather (Table~\ref{tab:weather_miou}), between 7.4 and 10.3 points in every condition, consistent with a mechanism --- coarse upsampled regions painted into the labels --- that does not depend on visibility.
 
 Running both stages together costs more than either alone --- 34.7 mIoU with LLaVA and 35.5 with Qwen, $-6.4$ and $-5.9$ against the same backend's triage-only variant --- so discovery dominates the interaction, and the two backends remain indistinguishable at the end of the ladder as they were in the middle of it (paired difference $-0.7$, CI $[-1.4, +0.1]$).
 
