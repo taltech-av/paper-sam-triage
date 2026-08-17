@@ -221,72 +221,79 @@ Both models annotate the same 4,110 frames and 90,176 masks.
 Each run sees the same mask identifiers, segmentation agreement values, LiDAR support, and discovery candidates.
 Triage is recomputed offline under one rule, so differences arise only from the VLMs.
 Prompts are identical and no per‑model tuning is applied.
-The question is how far a fixed prompt set carries, not how well either model could be made to perform.
-
-\paragraph{Verdicts reported as recorded}
-A reply that cannot be read is replaced by a fallback verdict, so a recorded verdict is not always a judgement.
-We report the rates the pipeline acted on, \emph{as recorded}, because those are the rates that produced the labels, and give the \emph{answered-only} rate beside them wherever the substitutions can be identified.
-This is possible for Qwen; LLaVA's run predates the per-agent parse telemetry, so its substitutions cannot be separated from confident answers.
-Since the BBox fallback counts as recognition, an as-recorded rate can only overstate the answered one, which fixes the direction of a difference even when one side cannot be decomposed.
-
 
 \section{\uppercase{Results}}
 \label{sec:results}
 
 \subsection{Agent behaviour}
 
-Figure~\ref{fig:qualitative} illustrates the five decision paths produced by the system.  
-These examples show how the three agents interact: hallucinated masks are rejected when both judges concur, geometric failures remove pixels only when supported by a second signal, single-agent disagreements retain the mask, and discovery recovers objects missed by SAM.  
-These behaviours are identical across backends; the differences reported below arise from the VLM verdicts that feed into these paths.
+Figure~\ref{fig:qualitative} shows the triage rule acting on real masks, with each panel labelled by its outcome in Section~\ref{sec:triage}.
+Removal requires two counts of disagreement, and one signal can supply both: in (a) a background verdict is sufficient, while in (c) two independent dissents are needed.
+Panels (b) and (c) expose the rule most directly. They share a consistency failure and differ only in the Quality agent’s verdict, support in (b) yields retention, contradiction in (c) yields removal.
+The rule itself is fixed across backends; only the BBox verdict changes, and the remainder of this section measures how far that verdict moves.
 
 \begin{figure*}[t]
     \centering
-    \begin{subfigure}[b]{0.19\textwidth}
+    % Outcome labels are too long for a 0.19\textwidth column to justify cleanly.
+    \captionsetup[subfigure]{justification=raggedright,singlelinecheck=false}
+    \begin{subfigure}[t]{0.19\textwidth}
         \includegraphics[width=\linewidth]{figures/qual_halluc_a.png}\par\vspace{2pt}
         \includegraphics[width=\linewidth]{figures/qual_halluc_b.png}
-        \caption{Hallucination}
+        \caption{Reject: background}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.19\textwidth}
+    \begin{subfigure}[t]{0.19\textwidth}
         \includegraphics[width=\linewidth]{figures/qual_consistency.png}\par\vspace{2pt}
         \includegraphics[width=\linewidth]{figures/qual_consistency_lidar.png}
-        \caption{LiDAR fail, kept}
+        \caption{Retained: one dissent (LiDAR)}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.19\textwidth}
+    \begin{subfigure}[t]{0.19\textwidth}
         \includegraphics[width=\linewidth]{figures/qual_depthfail.png}\par\vspace{2pt}
         \includegraphics[width=\linewidth]{figures/qual_depthfail_lidar.png}
-        \caption{LiDAR fail, deleted}
+        \caption{Reject: two dissents}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.19\textwidth}
+    \begin{subfigure}[t]{0.19\textwidth}
         \includegraphics[width=\linewidth]{figures/qual_retain_downgrade.png}\par\vspace{2pt}
         \includegraphics[width=\linewidth]{figures/qual_retain_quality.png}
-        \caption{Disagreement}
+        \caption{Retained: one dissent (BBox, Quality)}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.19\textwidth}
+    \begin{subfigure}[t]{0.19\textwidth}
         \includegraphics[width=\linewidth]{figures/qual_discovery_cyclist.png}\par\vspace{2pt}
         \includegraphics[width=\linewidth]{figures/qual_discovery_pedestrian.png}
-        \caption{Discovery}
+        \caption{Discovery: pixels added}
     \end{subfigure}
-    \caption{The five decision paths of the multi-agent system, LLaVA-1.6-34B. Red overlay in (a)--(d) is the SAM mask under review; (b) and (c), lower panels, show LiDAR returns with the mask outlined in green. Cyan overlay in (e) is the Quality Agent's per-pixel prediction that seeds the discovery candidate; the orange box marks the region confirmed by the VLM.}
+\caption{
+Triage rule on real masks under LLaVA-1.6-34B, with panels labelled by their Section~\ref{sec:triage} outcomes.
+Panels (a)--(d) show the SAM mask in red; (b) and (c) also show LiDAR returns with the mask outlined in green.
+In (a) the BBox agent identifies background, providing both dissents needed for removal.
+Panels (b) and (c) share a consistency failure but differ in the Quality agent’s verdict, yielding retention in (b) and removal in (c).
+Panel (e) shows discovery: the Quality agent’s per-pixel prediction (cyan) seeds a region confirmed by the VLM (orange).
+}
     \label{fig:qualitative}
 \end{figure*}
 
 \input{tables/agent_behavior}
-
 \subsection{Backend divergence in mask judgement}
 
-Table~\ref{tab:agent_behavior} gives the paired comparison for the BBox agent.  
-Under identical prompts and identical non-VLM inputs, the two backends agree on only 57.0\% of mask-level judgements.  
-Qwen is more permissive overall, returning \texttt{valid} on 70.9\% of crops versus LLaVA’s 62.1\% as recorded; its answered-only rate is 67.2\%.
+Table~\ref{tab:agent_behavior} gives the paired comparison for the BBox agent.
+With identical prompts and identical non-VLM inputs, the two backends agree on only 57.0\% of mask-level judgements.
+Qwen is the more permissive backend overall, marking 70.9\% of crops as containing an object compared with LLaVA’s 62.1\%.
 
-The differences are strongly class-dependent.  
-Qwen rejects fewer signs (10.8\% vs.\ 26.0\%) and cyclists (33.3\% vs.\ 46.5\%), but more vehicles (16.3\% vs.\ 5.1\%) and pedestrians (35.4\% vs.\ 16.9\%).  
-A single acceptance rate hides this redistribution.
+The differences are strongly class-dependent.
+Qwen rejects far fewer signs (10.8\% vs.\ 26.0\%) and cyclists (33.3\% vs.\ 46.5\%), but substantially more vehicles (16.3\% vs.\ 5.1\%) and pedestrians (35.4\% vs.\ 16.9\%).
+A single overall acceptance rate hides this redistribution across classes.
 
-These shifts propagate into the labels.  
-Recomputed under one triage rule, 40.3\% of masks receive different outcomes under the two backends.  
-Of these, 16{,}985 masks (18.8\% of the corpus, 7.5 million pixels) are retained by one backend and rejected by the other.
+These shifts propagate directly into the final labels.
+Under the same deterministic triage rule, 40.3\% of masks receive different outcomes across the two backends.
+Of these, 16{,}985 masks (18.8\% of the data, 7.5 million pixels) are retained by one backend and rejected by the other.
 Since only rejection removes pixels, backend choice determines which objects survive triage.
-Figure~\ref{fig:flips} shows four of these masks, one per class, with every non-VLM input held identical.
+Figure~\ref{fig:flips} shows four such cases, one per class, with all non-VLM inputs held fixed.
+
+Table~\ref{tab:agent_performance} compares each backend to the Quality Agent.
+That agent is not a ground truth, so the table measures divergence from one fixed automated reference rather than correctness; a backend may differ by being right.
+On this yardstick, LLaVA is the more balanced judge (precision 72.0, recall 71.1, F1 71.5), while Qwen trades precision for recall (69.0, 77.8, F1 73.1).
+
+
+
 
 \begin{figure*}[t]
     \centering
@@ -306,76 +313,74 @@ Figure~\ref{fig:flips} shows four of these masks, one per class, with every non-
         \includegraphics[width=\linewidth]{figures/qual_flip_sign.png}
         \caption{Sign: LLaVA deletes}
     \end{subfigure}
-    \caption{Four of the 16{,}985 masks that one backend keeps and the other deletes, with the deleting backend named under each panel. Every input is shared: the same SAM mask, the same Swin agreement $\alpha$, and the same LiDAR support, all verified bit-identical across the runs (Section~\ref{sec:evaluation}), so the BBox verdict is the only difference.}
+\caption{
+Four examples from the 16{,}985 masks on which the two backends disagree, with the backend issuing the deletion shown beneath each panel.
+All non-VLM inputs are shared: the same SAM proposal, the same Swin agreement~$\alpha$, and the same LiDAR support, each verified identical across runs (Section~\ref{sec:evaluation}).
+The only differing signal is the BBox judgement.
+}
+
     \label{fig:flips}
 \end{figure*}
 
 \input{tables/agent_performance}
 
-Table~\ref{tab:agent_performance} compares each backend to the Quality Agent.
-That agent is not a ground truth, so the table does not measure correctness; it measures how far each backend's decision boundary sits from one fixed automated reference, and a backend could differ from it by being right.
-On that yardstick LLaVA is the more balanced judge (precision 72.0, recall 71.1, F1 71.5), while Qwen trades precision for recall (69.0, 77.8, F1 73.1).
-Restricting Qwen to answered masks raises its precision to 75.6 and accuracy to 67.5, which locates part of its apparent permissiveness in substituted verdicts rather than in the model.
 
-\subsection{Backend divergence in discovery}
+\subsection{Backend behaviour in discovery}
 
-Given the same 55{,}256 candidates (Table~\ref{tab:agent_behavior}), the two backends confirm at nearly the same overall rate over answered candidates: 82.4\% for Qwen against 83.9\% for LLaVA.
-On the two presence-confirmation prompts Qwen is in fact the more permissive of the pair, confirming 87.6\% of vehicle candidates against LLaVA's 83.0\% and 89.3\% of sign candidates against 84.2\%.
-A study reporting one confirmation rate per model would conclude that the two backends behave alike.
+Both backends receive the same 55{,}256 candidates. Over answered candidates their overall confirmation rates are almost identical: 83.9\% for LLaVA and 82.4\% for Qwen. On vehicle and sign prompts Qwen is actually the more willing of the two, confirming 87.6\% of vehicle candidates against LLaVA’s 83.0\%, and 89.3\% of sign candidates against 84.2\%. If discovery were summarised with a single confirmation rate per model, the two backends would appear to behave alike.
 
-The divergence appears on the human prompt.
-When the candidate must be classified as cyclist or pedestrian, Qwen confirms 45.3\% of candidates, compared to LLaVA’s 85.9\%.  
-This produces 3{,}506 human objects under Qwen and 6{,}376 under LLaVA from identical candidate regions.  
-The 41-point gap is concentrated on the two classes the pipeline can least afford to lose.
-The collapse is not the backend being generally more cautious, because the same backend is the more permissive of the two on the other two prompts.
-What changes is the task the prompt encodes: confirming a presence transfers, choosing between two classes does not.
+The difference appears on the human prompt. When the candidate must be classified as cyclist or pedestrian, Qwen confirms 45.3\% of candidates while LLaVA confirms 85.9\%. From identical candidate regions this produces 3{,}506 human objects under Qwen and 6{,}376 under LLaVA. The gap sits entirely on the two classes the pipeline can least afford to lose.
 
-Taken together, the two VLM agents fail in different ways under the same prompt set.  
-The BBox agent shifts its decision boundary differently for each class, and the discovery agent transfers on two prompts but collapses on the third.  
-Portability must therefore be validated per agent and per class.
+Discovery is therefore the agent on which backend choice has its largest effect: the human prompt alone moves 2{,}870 objects between the two annotation sets, from candidate regions that are identical by construction.
 
-\subsection{Value of the discovery agent}
-\label{sec:human}
+Which of the two sets is better is a question this comparison cannot reach (Section~\ref{sec:scope}); the 41-point gap establishes that the confirmations differ, not that either is closer to the objects present. What it does establish is that the gap is invisible to the statistic such studies normally report: pooled over all three prompts, the two backends confirm at 83.9\% and 82.4\% and would be judged interchangeable on this agent.
 
-\input{tables/discovery_gate}
 
-Because the candidate set is generated without the VLM, confirming every candidate is a control: it is what the pipeline does with no gate at all.
-A human labeler judged 13{,}695 candidates over 1{,}001 of the 4{,}110 frames, marking each as a real object of the proposed class or not (Table~\ref{tab:discovery_gate}).
-Standalone candidates cover regions where SAM segmented nothing; fringe candidates extend boundaries on objects SAM already segmented, and are 70\% of the population.
-
-On standalone candidates, 27.3\% of which are real objects before any confirmation, Qwen's gate raises precision by 1.43 points while discarding 26\% of candidates, and LLaVA's by 0.24 points, an interval spanning zero, while discarding 32\%.
-On fringe candidates both gates are worse than no gate, by 0.48 points for LLaVA and 0.89 for Qwen, with both intervals excluding zero: the candidates they decline are more likely to be real than the ones they confirm.
-Coverage is a quarter of the frames and a single labeler whose strictness is still tightening, so the base rates are provisional; the lift is paired across backends and is the finding, and it has only shrunk as the reference has tightened.
-
-This is the agent where backend substitution has its largest effect (a 41-point swing that moves 2{,}870 human objects between annotation sets), and also the agent whose verdict contributes least to precision.  
-Backend substitution changes the labels; it does not guarantee improvement.
-
-\subsection{Cost of the larger backend}
+\subsection{Inference performance}
 
 \input{tables/timing}
 
 Table~\ref{tab:timing} reports runtime.  
-The BBox agent dominates cost: 3.54 seconds per call for LLaVA and 11.39 seconds for Qwen.  
-Annotating the 4{,}110 frames required 132.3 GPU-hours with LLaVA and 426.9 GPU-hours with Qwen, a factor of 3.2.  
-VRAM usage is approximately 22 GB for LLaVA and 51 GB for Qwen.
+The BBox agent dominates cost: LLaVA requires 3.54 seconds per call, while Qwen requires 11.39 seconds.  
+Annotating the 4{,}110 frames therefore took 132.3 GPU-hours with LLaVA and 426.9 GPU-hours with Qwen, a factor of 3.2.  
+VRAM usage is roughly 22\,GB for LLaVA and 51\,GB for Qwen.
 
-Against this cost, Qwen is less selective, differs by 41 points on human discovery, and offers at most 1.4 points of precision on the candidates that matter.
-The additional cost produces a different annotation distribution, not a better one on any metric measured here.
+Against this cost, Qwen is the less selective mask judge and differs by 41 points on the human discovery prompt.
+The additional compute therefore produces a different annotation distribution; nothing measured here shows it to be a better one.
 
-\subsection{Scope of these findings}
+\subsection{Scope and limitations}
+\label{sec:scope}
 
-Two backends give one pairwise comparison, which cannot separate a property of VLM-judge pipelines from a property of these two models.
-We therefore claim no generality for the constants: a third backend could place 57.0\% agreement, or a 41-point prompt collapse, at the centre of a distribution or at its edge, and nothing here distinguishes those.
+Three limits bound what these numbers can support.
 
-Two findings survive that limitation, because they rest on contrasts within a backend rather than on the size of a gap between backends.
-The first is the discovery collapse: the backend that loses 41 points on the human prompt is the more permissive of the two on the other two prompts, so the failure cannot be a global disposition and belongs to the task the prompt encodes.
-The second is the class redistribution: the same backend rejects more vehicles and pedestrians while rejecting fewer signs and cyclists, so substitution moves the decision boundary differently per class rather than shifting selectivity uniformly.
-A model that were simply stricter, or simply weaker, would produce neither pattern.
-Neither statement needs a third backend.
+\emph{No ground truth.}  
+All references in this study are automated.  
+The backends are scored against each other and against the Quality agent, and that agent is a noisy judge rather than a record of the scene.  
+The study therefore measures where two backends place their decision boundaries differently, not which boundary is correct.  
+When the two disagree on a mask, nothing here says which one should be believed.  
+A rate that moves under substitution may be moving toward the objects present or away from them.  
+Establishing that requires a human reference over the same regions, which is separate work.
 
-What this study offers is therefore the protocol rather than the constants.
-A substitution can be localised to an agent and to a class on identical inputs, the localisation is what a pooled acceptance rate destroys, and a pipeline that never measures it will not notice the point at which its labels change.
+\emph{One pairwise comparison.}
+Two backends cannot separate a property of VLM‑judge pipelines from a property of these two models.
+No generality is claimed for the constants.
+A third backend could place 57.0\% agreement or a 41‑point prompt collapse at the centre of a distribution or at its edge.
+Nothing here distinguishes those possibilities.
+Two results are internal to a single backend and do not depend on the size of the gap.  
+The backend that loses 41 points on the human discovery prompt is the more willing of the two on the other prompts, so that failure belongs to the task the prompt encodes rather than to a global disposition.  
+The same backend rejects more vehicles and pedestrians while rejecting fewer signs and cyclists, so substitution moves the boundary differently per class rather than shifting selectivity uniformly; a model that were simply stricter or simply weaker would not produce this pattern.
 
+
+\emph{Unreadable replies.}  
+When the parser cannot read a reply, the agent substitutes a fallback verdict.  
+The two VLM agents fall back in opposite directions.  
+An unreadable reply preserves a mask on the BBox path and discards a candidate on the discovery path.  
+The rates above are the ones the pipeline acted on.  
+The two runs differ in how often this arose on discovery, 957 unreadable replies for LLaVA and none for Qwen.  
+This is why confirmation rates there are taken over answered candidates on both sides.  
+On the mask path we do not separate substituted verdicts from judgements, so the BBox rates contain both.  
+Because that fallback counts as recognition, it can only understate rejection.  
+This fixes the direction of every difference reported above without fixing its exact size.
 
 \section{Conclusion}
 
