@@ -263,11 +263,11 @@ Fig.~\ref{fig:geometry_cases} shows one candidate from each cell.
         \caption{New object (6.1\,\%)}
     \end{subfigure}
     \caption{One real candidate per cell of Table~\ref{tab:discovery_geometry}: grey with a white outline is a same-class SAM mask the pipeline already had, orange a candidate the human rejected, teal one they kept.
-    (a) a correctly segmented sign with a large region painted beside it --- the rim is subtracted from SAM's coverage, so it lies on background rather than duplicating the mask.
-    (b) a region on foliage where no sign exists.
-    (c) SAM had the pedestrian's head and shoulders only, so the rim really is the rest of the object.
-    (d) a row of cars SAM never proposed.
-    The ring test is local ($9\,$px), so a same-class mask elsewhere in the frame --- as in (b) and (d) --- does not make a candidate a rim.}
+    (a) a pedestrian SAM had already segmented, with the candidate wrapping the outline; the rim is subtracted from SAM's coverage, so it lies on the background around the person rather than duplicating the mask.
+    (b) a region on empty pavement where no person exists.
+    (c) SAM had the rider's upper body only, so the rim really is the rest of the object.
+    (d) a free-standing sign SAM never proposed.
+    The ring test is local ($9\,$px), so a same-class mask elsewhere in the frame does not make a candidate a rim.}
     \label{fig:geometry_cases}
 \end{figure}
 

@@ -109,8 +109,32 @@ def sam_class_map(frame_id):
     return out
 
 
-def score(row, pixels):
-    """Legibility: mid-sized candidates, not slivers and not whole-frame blobs."""
+NEIGHBOUR_VIEW_RADIUS = 40      # px; "near the candidate" for the figure, not the join
+
+
+def neighbour_pixels(pixels, cmap, own_class):
+    """Same-class SAM pixels lying near the candidate.
+
+    The ring join that defines the cell uses a 9 px test, which can be satisfied
+    by a mask far too small to see. This is the *visual* neighbourhood: what a
+    reader would actually have to spot to accept that the candidate is a rim on
+    an object the pipeline already had.
+    """
+    same = cmap == FOLD_ID[fold(own_class)]
+    if not same.any():
+        return np.zeros_like(same)
+    k = np.ones((2 * NEIGHBOUR_VIEW_RADIUS + 1,) * 2, np.uint8)
+    return same & cv2.dilate(pixels.astype(np.uint8), k).astype(bool)
+
+
+def score(row, pixels, cmap=None, geom=None, own_class=None):
+    """Legibility: mid-sized candidates, not slivers and not whole-frame blobs.
+
+    For the two `same` cells the figure has to show a relationship, not just a
+    blob: if the SAM mask the candidate is a rim of is a speck beside it, the
+    panel demonstrates nothing. Those candidates are rejected outright, and the
+    score prefers a neighbour of comparable size to the candidate.
+    """
     area = int(pixels.sum())
     if not 900 <= area <= 90_000:
         return -1.0
@@ -120,7 +144,18 @@ def score(row, pixels):
         return -1.0
     fill = area / float(h * w)          # solid blobs read better than scatter
     centre = 1.0 - abs((xs.mean() / pixels.shape[1]) - 0.5) * 2
-    return fill * 0.6 + centre * 0.4
+
+    relation = 0.0
+    if geom == "same" and cmap is not None:
+        near = int(neighbour_pixels(pixels, cmap, own_class).sum())
+        if near < 600 or near < 0.25 * area:
+            return -1.0                 # the object it abuts would be invisible
+        ratio = near / float(area)
+        # Best when the two are within about 3x of each other in either
+        # direction: the rim reads as a rim on something, not as the object.
+        relation = float(np.exp(-((np.log(ratio)) ** 2) / (2 * 1.0 ** 2)))
+
+    return fill * 0.4 + centre * 0.2 + relation * 0.4
 
 
 def overlay(img, mask, bgr):
@@ -168,12 +203,34 @@ def render(frame_id, index, verdict, own_class, out_path):
     return True
 
 
+def contact_sheet(tiles, cols=3):
+    """One browsable sheet per cell, labelled so a pick can be named from it."""
+    tw, th, cap = 400, 300, 24
+    rows_n = (len(tiles) + cols - 1) // cols
+    sheet = np.zeros((rows_n * (th + cap), cols * tw, 3), np.uint8)
+    for i, (name, img) in enumerate(tiles):
+        r, c = divmod(i, cols)
+        y, x = r * (th + cap), c * tw
+        sheet[y:y + th, x:x + tw] = cv2.resize(img, (tw, th), interpolation=cv2.INTER_AREA)
+        cv2.putText(sheet, name, (x + 4, y + th + 17), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (0, 255, 255), 1, cv2.LINE_AA)
+    return sheet
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--list", action="store_true", help="print top picks per cell and exit")
     parser.add_argument("--pick", action="append", default=[],
                         help="force a cell: cell=frame_id:candidate_index")
     parser.add_argument("--top", type=int, default=6)
+    parser.add_argument("--sheet", action="store_true",
+                        help="render the top picks per cell as browsable panels + "
+                             "contact sheets instead of writing the paper figures")
+    parser.add_argument("--sheet-dir", type=Path,
+                        default=Path(__file__).parent / "qualitative_candidates" / "ral_ready")
+    parser.add_argument("--exclude-icaart", action="store_true",
+                        help="skip frames already used in the ICAART figures, so the two "
+                             "papers keep disjoint photo sets")
     args = parser.parse_args()
 
     forced = {}
@@ -181,6 +238,14 @@ def main():
         cell, _, where = spec.partition("=")
         frame_id, _, index = where.partition(":")
         forced[cell] = (frame_id, int(index))
+
+    excluded = set()
+    if args.exclude_icaart:
+        prov = Path(__file__).parent / "paper" / "icaart" / "figures" / "qualitative_provenance.json"
+        if prov.exists():
+            excluded = {e["frame_id"] for e in json.loads(prov.read_text()).values()
+                        if e.get("frame_id")}
+            print(f"skipping {len(excluded)} frames already used in the ICAART figures")
 
     rows = load_rows()
     class_of = {(frame_id_of(r), int(r["maskId"])): fold(r["class"])
@@ -196,7 +261,10 @@ def main():
         by_frame.setdefault(frame_id_of(row), []).append(row)
 
     for frame_id, frame_rows in by_frame.items():
+        if frame_id in excluded:
+            continue
         shape = None
+        cmap = None                     # SAM class map, built once per frame
         for row in frame_rows:
             geom = geometry_of(row, class_of)
             for cell, (want_geom, want_verdict, _) in CELLS.items():
@@ -214,9 +282,40 @@ def main():
                 pixels = candidate_pixels(frame_id, index, shape)
                 if pixels is None or not pixels.any():
                     continue
-                s = score(row, pixels)
+                if cmap is None:
+                    cmap = sam_class_map(frame_id)
+                s = score(row, pixels, cmap, want_geom, row["class"])
                 if s > 0:
                     buckets[cell].append((s, frame_id, index, row["class"]))
+
+    if args.sheet:
+        manifest = {}
+        for cell, (_, verdict, label) in CELLS.items():
+            picks = sorted(buckets[cell], reverse=True)[:args.top]
+            cell_dir = args.sheet_dir / cell
+            cell_dir.mkdir(parents=True, exist_ok=True)
+            for old_png in cell_dir.glob("*.png"):
+                old_png.unlink()
+            tiles, entries = [], []
+            for n, (s_, frame_id, index, cls) in enumerate(picks):
+                name = f"{cell}_{n:02d}"
+                out = cell_dir / f"{name}.png"
+                if not render(frame_id, index, verdict, cls, out):
+                    continue
+                tiles.append((name, cv2.imread(str(out))))
+                entries.append({"name": name, "cell": cell, "frame_id": frame_id,
+                                "candidate_index": index, "class": cls,
+                                "score": round(s_, 3),
+                                "pick": f"{cell}={frame_id}:{index}"})
+            if tiles:
+                cv2.imwrite(str(args.sheet_dir / f"{cell}_sheet.png"), contact_sheet(tiles))
+            manifest[cell] = entries
+            print(f"{label:18s} {len(tiles)} panels -> {cell_dir}")
+        (args.sheet_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        print(f"\nbrowse {args.sheet_dir}/*_sheet.png, then re-run with e.g."
+              f"\n  python make_candidate_geometry_figure.py --pick {manifest['edge_bleed'][0]['pick']}"
+              if manifest.get("edge_bleed") else "")
+        return
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for cell, (_, verdict, label) in CELLS.items():
