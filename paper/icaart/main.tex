@@ -33,12 +33,12 @@
 
 \abstract{
 Vision–language models (VLMs) are now used as multi‑agent judges in large annotation pipelines, where each agent operates under a fixed role, a fixed prompt, and a small output vocabulary.
-When VLM backend models are replaced, then there is no established way to measure where model behaviour changes inside a deployed system.
+When a VLM backend is replaced, there is no established way to measure where model behaviour changes inside a deployed system.
 We introduce a controlled, per‑agent, per‑class process for backend substitution and apply it to a SAM‑based mask‑verification pipeline on the Zenseact Open Dataset.
 Two open‑weight VLMs, LLaVA‑1.6‑34B and Qwen2.5‑VL‑72B, are run over the same 4{,}110 driving frames and 90{,}176 mask proposals using identical prompts and identical non‑VLM inputs.
-All comparisons are paired at mask level, the triage rule is recomputed once for both runs.
+All comparisons are paired at mask level, and the triage rule is recomputed once for both runs.
 The two backends agree on only 57.0\% of the judgements about what object the cropped region contains, and the differences are strongly class‑dependent.
-Relative to LLaVA, Qwen rejects far fewer signs and cyclists, yet rejects more vehicles and pedestrians, shifting which classes lose labels rather than the overall rejection rate.
+Relative to LLaVA, Qwen rejects far fewer signs and cyclists yet more vehicles and pedestrians: per-class rejection rates move by 11 to 19 points while the overall rejection rate moves by under 4.
 In the final annotations, 18.8\% of masks (7.5 million pixels) are retained by one backend and removed by the other.
 The largest divergence appears in the step that recovers objects missed by SAM, where the confirmation rate for human candidates drops from 85.9\% to 45.3\% when the backend is changed.
 Reliable deployment therefore requires systematic per‑agent and per‑class validation on identical inputs.
@@ -78,12 +78,12 @@ Finally, we quantify the operational cost of the larger backend and relate that 
 \section{\uppercase{Related Work}}
 
 Language models have increasingly been used as delegated judges in data pipelines.  
-The LLM-as-judge pattern~\cite{zheng2023judging,wu2023llmjudge} shows that a model can evaluate another system’s output when given a structured prompt and a constrained response format, and this idea has already been applied to data annotation~\cite{gilardi2023chatgptannotator,li2023llmannotator,li2023llmdata}.  
+The LLM-as-judge pattern~\cite{zheng2023judging,gu2024judgesurvey} shows that a model can evaluate another system’s output when given a structured prompt and a constrained response format, and this idea has already been applied to data annotation~\cite{gilardi2023chatgptannotator,li2023llmdata}.  
 Agent frameworks extend this approach by combining several such roles into pipelines with explicit delegation~\cite{xi2023agents,schick2023toolformer,wang2023voyager}, an idea that also appears in embodied decision-making~\cite{ahn2022saycan,huang2023inner,brohan2023rt2}.  
 Most of this work evaluates the composed system as a whole and assumes that a role specification can be transferred across different models without changing behaviour.
 
 That assumption is weakly supported.  
-Prompt phrasing and format are known to shift model behaviour, and work on instruction form~\cite{wei2022chain} shows that even small changes in wording can alter what a model does.  
+Prompt phrasing and format are known to shift model behaviour, and work on prompting strategies~\cite{wei2022chain} shows that even small changes in wording can alter what a model does.  
 What is missing is a controlled substitution study at deployment scale, where two backends are run with identical prompts and identical non-model inputs, and the comparison is resolved per agent and per class rather than through a single aggregate rate.  
 Research on foundation-model capability surfaces~\cite{bommasani2021opportunities} suggests that substitution is not neutral, but does not measure where these differences appear inside a working system.
 
@@ -120,7 +120,7 @@ Masks must exceed $\tau = 0.1$, which removes masks leaking into sky or void reg
 This signal is identical across backends.
 
 \subsubsection{Quality agent}
-The Quality agent is a CLFTv2 cross‑fusion segmentation model with a SwinV2‑Large backbone, trained on the clean partition and referred to as Swin in the tables.
+The Quality agent is a CLFTv2 cross‑fusion segmentation model~\cite{gu2024clft} with a SwinV2‑Large backbone, trained on the clean partition and referred to as Swin in the tables.
 It takes the camera image together with the projected LiDAR depth map and predicts a dense class map at $384 \times 384$ once per frame; each mask is then compared to this map through agreement $\alpha$, the fraction of its pixels assigned to its annotated class.
 Thresholds are class‑specific: $\tau_q^{\text{large}} = 0.30$ for vehicles and signs, and $\tau_q^{\text{small}} = 0.15$ for cyclists and pedestrians.  
 Cyclists and pedestrians share one segmentation class, so $\alpha$ measures membership in the merged human class.  
@@ -191,7 +191,7 @@ This work builds on our earlier SAM-based annotation pipeline \cite{tahves2026sa
 We revisit those annotations here: the flagged partition is re‑annotated under the multi‑agent system to evaluate and correct the SAM labels and to measure how VLM backend substitution changes those corrections.
 
 The previous pass produced 2,319 clean frames and 4,135 flagged frames (Table~\ref{tab:dataset}).  
-Twenty‑five flagged frames could not be annotated cleanly and are removed, leaving 4,110 frames and 90,176 mask proposals.
+Twenty‑five flagged frames could not be annotated cleanly and are removed, dropping 585 masks and leaving 4,110 frames and 90,176 mask proposals.
 
 The flagged partition contains denser and more difficult scenes: 21.9 masks per frame versus 15.5 in the clean partition, and object pixels covering 3.64\% of the image versus 2.18\% (Table~\ref{tab:dataset_distributions}).  
 Because our comparison is intentionally run on this harder half of the dataset, the verdict rates reported here should not be interpreted as typical for everyday driving scenes.
@@ -207,7 +207,7 @@ The classes where the two backends diverge most are therefore the ones with the 
 \subsection{Evaluation}
 \label{sec:evaluation}
 
-We compare two open‑weight VLM backends, LLaVA‑1.6‑34B \cite{liu2024llava} and Qwen2.5‑VL‑72B \cite{bai2025qwen25vl}, served on identical hardware on the TalTech HPC cluster using an NVIDIA A100\,80GB GPU.
+We compare two open‑weight VLM backends, LLaVA‑1.6‑34B \cite{liu2024llava} and Qwen2.5‑VL‑72B \cite{bai2025qwen25vl}, served on identical hardware on the TalTech HPC cluster~\cite{herrmann} using an NVIDIA A100\,80GB GPU.
 
 \paragraph{Serving and decoding}
 Both backends are served locally through Ollama, one model resident at a time, as the released tags \texttt{llava:34b} and \texttt{qwen2.5vl:72b}.
