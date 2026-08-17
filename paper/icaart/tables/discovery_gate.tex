@@ -1,0 +1,32 @@
+% Generated from analyze_human_verification.py --only discovery, plus a paired
+% frame bootstrap on the precision lift (5,000 resamples, seed 42).
+% Labeled subset: 1,001 of 4,110 frames (24.4%); 13,695 of 55,252 candidates.
+\begin{table}[t]
+\centering
+\caption{What the VLM confirmation gate buys on discovery candidates, against a human reference. \emph{Standalone} candidates cover regions where SAM segmented no object, so confirming one recovers a missed object; \emph{fringe} candidates are rims on objects SAM had already segmented, and are 70.3 percent of the population. \emph{Ungated} is the share of all candidates of that kind the labeler judged a real object, which is what painting every candidate would yield. \emph{Gated} is the same share among the candidates a backend confirmed, and \emph{lift} is the difference, with a 95 percent interval resampling frames. Both backends are scored on the same candidates by the same labeler, so the lift is paired; the ungated rates themselves are provisional (Section~\ref{sec:human}).}
+\label{tab:discovery_gate}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric} & \textbf{Standalone} & \textbf{Fringe} \\
+\midrule
+Candidates labeled & 4{,}043 & 9{,}652 \\
+Frames & 915 & 969 \\
+Share of all candidates & 29.7\% & 70.3\% \\
+\addlinespace
+Ungated (paint everything) & 27.3\% & 35.0\% \\
+\addlinespace
+\multicolumn{3}{l}{\textit{LLaVA-1.6-34B}} \\
+Candidates confirmed & 67.8\% & 88.0\% \\
+Gated precision & 27.6\% & 34.6\% \\
+Lift & $+0.24$ & $-0.48$ \\
+\phantom{Lift} 95\% CI & [$-0.82$, $+1.29$] & [$-0.92$, $-0.08$] \\
+\addlinespace
+\multicolumn{3}{l}{\textit{Qwen2.5-VL-72B}} \\
+Candidates confirmed & 73.7\% & 86.3\% \\
+Gated precision & 28.8\% & 34.2\% \\
+Lift & $+1.43$ & $-0.89$ \\
+\phantom{Lift} 95\% CI & [$+0.52$, $+2.33$] & [$-1.33$, $-0.44$] \\
+\bottomrule
+\end{tabular}}
+\end{table}

@@ -131,16 +131,17 @@ def mine(results_dir: Path, categories: list[str]) -> dict[str, list[Candidate]]
                         f"(Swin agreement {_pct(alpha)}, LiDAR support {_pct(supp)})"),
                     **common))
 
-            # The refine path: everything looks right except the geometry.
+            # Everything looks right except the geometry: one negative, so the
+            # mask is retained rather than deleted.
             if ("consistency_fail" in out and a.get("bbox") == "valid"
                     and a.get("quality") == "good" and a.get("consistency") == "fail"):
                 out["consistency_fail"].append(Candidate(
                     category="consistency_fail", note=(
                         f"valid + good but LiDAR support {_pct(supp)} below tau; "
-                        f"Correction agent returned {a.get('correction')}"),
+                        f"single negative, retained and flagged"),
                     **common))
 
-            # Geometry as a *rejecting* signal, not a refine trigger.
+            # Geometry as a *rejecting* signal: the same failure, but seconded.
             if ("depth_support" in out and a.get("consistency") == "fail"
                     and m["triage"] == "reject" and a.get("quality") == "bad"):
                 out["depth_support"].append(Candidate(

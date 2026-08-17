@@ -88,9 +88,8 @@ from agents.base import AgentOutcome, BaseAgent
 class _StubAgent(BaseAgent):
     # Non-overlapping on purpose: BaseAgent.parse matches by substring, so a
     # vocabulary like ("valid", "invalid") would resolve "invalid" to "valid".
-    # The live agents avoid this — BBoxAgent overrides parse() with word-boundary
-    # regex, CorrectionAgent orders "no_refine" first — but a stub must not
-    # smuggle that hazard into a test of something else.
+    # BBoxAgent avoids this by overriding parse() with a word-boundary regex —
+    # but a stub must not smuggle that hazard into a test of something else.
     VALID_OUTPUTS = ("alpha", "beta")
     SAFE_DEFAULT = "alpha"
 

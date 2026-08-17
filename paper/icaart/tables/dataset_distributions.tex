@@ -1,29 +1,19 @@
-\begin{table*}[t]
+\begin{table}[t]
 \centering
-\caption{Pixel-level class distribution by weather condition for both partitions.
-         Values are the percentage of total pixels occupied by each class, aggregated
-         across all frames in each weather group.
-         Human combines cyclist and pedestrian.
-         The flagged partition contains denser scenes (higher object coverage) and
-         proportionally more vehicles; rare-class (human) coverage drops in night
-         and snow conditions in both partitions.}
+\caption{Pixel-level class distribution by weather in the flagged partition.}
 \label{tab:dataset_distributions}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{l rcccc  rcccc}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrcccc}
 \toprule
-& \multicolumn{5}{c}{\textbf{Clean partition (good frames)}}
-& \multicolumn{5}{c}{\textbf{Flagged partition (poor annotations)}} \\
-\cmidrule(lr){2-6} \cmidrule(lr){7-11}
-\textbf{Weather} & \textbf{Frames} & \textbf{Veh.\,\%} & \textbf{Sign\,\%} & \textbf{Human\,\%} & \textbf{Object\,\%}
-                 & \textbf{Frames} & \textbf{Veh.\,\%} & \textbf{Sign\,\%} & \textbf{Human\,\%} & \textbf{Object\,\%} \\
+\textbf{Weather} & \textbf{Frames} & \textbf{Veh.\,\%} & \textbf{Sign\,\%} & \textbf{Human\,\%} & \textbf{Object\,\%} \\
 \midrule
-Day -- fair  & 1483 & 1.60 & 0.43 & 0.33 & 2.36 & 2778 & 2.93 & 0.66 & 0.38 & 3.97 \\
-Day -- rain  &  220 & 1.85 & 0.50 & 0.25 & 2.60 &  487 & 2.95 & 0.74 & 0.28 & 3.96 \\
-Night -- fair &  333 & 1.08 & 0.43 & 0.13 & 1.64 &  612 & 1.42 & 0.66 & 0.14 & 2.22 \\
-Night -- rain &  113 & 1.15 & 0.34 & 0.08 & 1.56 &  131 & 1.70 & 0.45 & 0.12 & 2.27 \\
-Snow         &  170 & 1.14 & 0.36 & 0.08 & 1.57 &  127 & 2.49 & 0.71 & 0.13 & 3.33 \\
+Day -- fair   & 2{,}778 & 2.93 & 0.66 & 0.38 & 3.97 \\
+Day -- rain   &    487 & 2.95 & 0.74 & 0.28 & 3.96 \\
+Night -- fair &    612 & 1.42 & 0.66 & 0.14 & 2.22 \\
+Night -- rain &    131 & 1.70 & 0.45 & 0.12 & 2.27 \\
+Snow          &    127 & 2.49 & 0.71 & 0.13 & 3.33 \\
 \midrule
-Total        & 2319 & 1.49 & 0.43 & 0.26 & 2.18 & 4135 & 2.66 & 0.66 & 0.31 & 3.64 \\
+All  & 4{,}135 & 2.66 & 0.66 & 0.31 & 3.64 \\
 \bottomrule
 \end{tabular}}
-\end{table*}
+\end{table}

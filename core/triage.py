@@ -3,9 +3,14 @@ from typing import Optional
 
 
 TRIAGE_ACCEPT = "accept"
-TRIAGE_REFINE = "refine"
 TRIAGE_REJECT = "reject"
 TRIAGE_REVIEW = "human_review"
+
+# "refine" was a fourth decision, produced by a CorrectionAgent that gated a
+# refinement stage nobody ever implemented. It retained pixels exactly as
+# TRIAGE_REVIEW does, so it never distinguished anything in an annotation, and
+# the agent has been removed. Archived runs still carry the value: analysis
+# scripts that read stored results pool it with TRIAGE_REVIEW.
 
 
 @dataclass
@@ -13,8 +18,6 @@ class TriageResult:
     decision: str
     bbox_out: Optional[str]
     quality_out: Optional[str]
-    failure_mode_out: Optional[str]
-    correction_out: Optional[str]
     consistency_out: Optional[str]
     # Raw scores for offline triage replay (thresholds applied post-hoc)
     swin_score: Optional[float] = None
@@ -40,8 +43,6 @@ class TriageResult:
 def triage(
     bbox_out: Optional[str],
     quality_out: Optional[str],
-    failure_mode_out: Optional[str],
-    correction_out: Optional[str],
     consistency_out: Optional[str],
 ) -> TriageResult:
     """
@@ -57,15 +58,11 @@ def triage(
     non-object surface (vegetation, building, sky, snow) under the mask. That
     is direct evidence of error, not mere absence of confirmation, and counts
     as two negatives — i.e. it rejects on its own.
-
-    The failure-mode agent is diagnostic only and never affects the decision.
     """
     result = TriageResult(
         decision=TRIAGE_REVIEW,
         bbox_out=bbox_out,
         quality_out=quality_out,
-        failure_mode_out=failure_mode_out,
-        correction_out=correction_out,
         consistency_out=consistency_out,
     )
 
@@ -98,12 +95,7 @@ def triage(
         result.decision = TRIAGE_ACCEPT
         return result
 
-    # Refine: visually good but geometrically unsupported, and a concrete
-    # correction step exists
-    if bbox_out == "valid" and quality_out == "good" and consistency_out == "fail":
-        if correction_out == "refine":
-            result.decision = TRIAGE_REFINE
-        return result
-
-    # Single negative signal or missing outputs → human review (non-destructive)
+    # Single negative signal or missing outputs → human review (non-destructive).
+    # This includes the visually-good-but-geometrically-unsupported case
+    # (valid + good + consistency fail), which one negative cannot reject.
     return result

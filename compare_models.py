@@ -74,13 +74,12 @@ CLASSES = ["vehicle", "sign", "cyclist", "pedestrian"]
 BBOX_VERDICTS = ["valid", "invalid", "background"]
 TRIAGE_OUTCOMES = ["accept", "reject", "human_review", "refine"]
 
-# What a CROSS-MODEL comparison may report. `refine` and `human_review` are
-# pooled because the agent that separates them — CorrectionAgent — answers on
-# llava and fails on every qwen call, so the split is a property of that failure
-# rather than of the model. Pooling is lossless for annotation outcomes:
-# annotation_writer.py zeroes pixels only on `reject`, so refine and
-# human_review write byte-identical labels. Keep TRIAGE_OUTCOMES for the raw
-# per-run breakdown; the CORRECTION AGENT block reports the split itself.
+# What a CROSS-MODEL comparison may report. `refine` appears only in archived
+# runs: it was produced by a CorrectionAgent that gated a refinement stage never
+# implemented, and it has since been removed from the pipeline. Pooling it with
+# `human_review` is lossless for annotation outcomes, because annotation_writer.py
+# zeroes pixels only on `reject`, so the two write byte-identical labels. Runs
+# made after the removal simply have no `refine` to pool.
 TRIAGE_REPORTED = ["accept", "reject", "retained_flagged"]
 
 
@@ -174,8 +173,6 @@ def recomputed_triage(mask: dict) -> str:
     return triage(
         bbox_out=a.get("bbox"),
         quality_out=a.get("quality"),
-        failure_mode_out=a.get("failure_mode"),
-        correction_out=a.get("correction"),
         consistency_out=a.get("consistency"),
     ).decision
 
@@ -187,7 +184,6 @@ def mask_stats(records: dict[str, dict], frames: list[str]) -> dict:
     reject_by_class, total_by_class = defaultdict(int), defaultdict(int)
     defaults = defaultdict(int)      # agent → masks whose verdict is a default
     degen = defaultdict(int)
-    correction_called = correction_empty = 0
     telemetry = False
     total = 0
 
@@ -209,11 +205,6 @@ def mask_stats(records: dict[str, dict], frames: list[str]) -> dict:
             if "bbox" not in pf:
                 bbox_answered[str(verdict)] += 1
 
-            if m["agents"].get("correction") is not None or "correction" in pf:
-                correction_called += 1
-                if "correction" in pf:
-                    correction_empty += 1
-
             d = recomputed_triage(m)
             tri[d] += 1
             if d == "reject":
@@ -222,9 +213,7 @@ def mask_stats(records: dict[str, dict], frames: list[str]) -> dict:
     return dict(total=total, bbox=dict(bbox), bbox_answered=dict(bbox_answered),
                 triage=dict(tri), reject_by_class=dict(reject_by_class),
                 total_by_class=dict(total_by_class), defaults=dict(defaults),
-                degen=dict(degen), has_telemetry=telemetry,
-                correction_called=correction_called,
-                correction_empty=correction_empty)
+                degen=dict(degen), has_telemetry=telemetry)
 
 
 def disc_stats(records: dict[str, dict], frames: list[str]) -> dict:
@@ -440,7 +429,7 @@ def print_report(names, stats, dstats, refs, agree, diverge, times, ident, args)
     print(f"  {'':32s} {a[:W]:>{W}} {b[:W]:>{W}}")
     for label, key in (("bbox telemetry recorded", "has_telemetry"),):
         print(f"  {label:32s} {str(stats[a][key]):>{W}} {str(stats[b][key]):>{W}}")
-    for agent in ("bbox", "correction"):
+    for agent in ("bbox",):
         row = []
         for n in names:
             s = stats[n]
@@ -520,8 +509,8 @@ def print_report(names, stats, dstats, refs, agree, diverge, times, ident, args)
         print(f"  {o:32s} "
               f"{pct(triage_reported(stats[a], o), stats[a]['total']):>{W}} "
               f"{pct(triage_reported(stats[b], o), stats[b]['total']):>{W}}")
-    print(f"  retained_flagged pools human_review and refine: both keep every pixel,")
-    print(f"  and the agent that splits them answers on only one of the two backends.")
+    print(f"  retained_flagged pools human_review with the archived `refine` label:")
+    print(f"  both keep every pixel, and the rule no longer produces the latter.")
 
     print(f"\n  LABEL-SET DIVERGENCE  (outcomes pooled to accept/reject/retained)")
     print(SEP)
@@ -543,17 +532,6 @@ def print_report(names, stats, dstats, refs, agree, diverge, times, ident, args)
               f"{pct(stats[b]['reject_by_class'].get(c,0), stats[b]['total_by_class'].get(c,0)):>{W}}")
 
     # ── Correction agent ──────────────────────────────────────────────────────
-    print(f"\n  CORRECTION AGENT  (gates the refine path)")
-    print(SEP)
-    print(f"  {'':32s} {a[:W]:>{W}} {b[:W]:>{W}}")
-    print(f"  {'calls':32s} {stats[a]['correction_called']:>{W}} {stats[b]['correction_called']:>{W}}")
-    row = [f"{stats[n]['correction_empty']} "
-           f"({pct(stats[n]['correction_empty'], stats[n]['correction_called'])})"
-           if stats[n]["has_telemetry"] else "not recorded" for n in names]
-    print(f"  {'unusable → default no_refine':32s} {row[0]:>{W}} {row[1]:>{W}}")
-    print(f"  {'refine decisions':32s} "
-          f"{stats[a]['triage'].get('refine',0):>{W}} {stats[b]['triage'].get('refine',0):>{W}}")
-
     # ── Discovery ─────────────────────────────────────────────────────────────
     print(f"\n  DISCOVERY — re-derived from stored raw responses with ONE parser.")
     print(f"  Fully measured on both sides: the only unbiased cross-model basis here.")
@@ -666,9 +644,7 @@ def write_latex(path: Path, names, stats, dstats, ident, coverage) -> None:
              "Swin agreement and LiDAR consistency are VLM-independent and verified "
              "bit-identical across the two runs). "
              "Triage outcomes are the three reported outcomes of Section~\\ref{sec:triage}, "
-             "recomputed offline under the current deterministic rule for both models; "
-             "\\emph{retained, flagged} pools refinement and human review, which write "
-             "identical labels. "
+             "recomputed offline under the current deterministic rule for both models. "
              "BBox rates are \\emph{as-recorded}: they include masks whose verdict is a "
              "\\textsc{safe\\_default} substitution after an unparseable reply, which is "
              "what the pipeline acted on. "

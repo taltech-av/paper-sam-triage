@@ -16,9 +16,9 @@ paragraph, plus one bonus (discovery, a headline contribution):
   hallucination   - BBox agent returns 'background': SAM proposed a mask, the VLM
                     says nothing is there.
   boundary_drift  - mask is otherwise valid+good but fails the LiDAR consistency
-                    check and the Correction Agent recommends 'refine'.
+                    check, so one negative signal cannot delete it.
   depth_support   - mask is rejected primarily because of LiDAR consistency failure
-                    (sky/void leak), independent of the refine path.
+                    (sky/void leak), rather than retained on a single negative.
   human_review    - mask routed to human review from agent disagreement, including
                     the bbox=invalid/quality=good downgrade rule described in
                     Section III-D of the paper.
@@ -90,10 +90,14 @@ def find_candidates(results_dir: Path) -> dict[str, list[Candidate]]:
                     Candidate("hallucination", fid, m["mask_id"], cls, bbox, px,
                                f"{cls}: BBox agent -> background"))
 
-            if m["triage"] == "refine" and a.get("correction") == "refine":
+            # Selected from the signals rather than the decision label, so this
+            # works on runs made before and after the CorrectionAgent removal
+            # (archived runs label some of these "refine", new ones never do).
+            if (a["bbox"] == "valid" and a.get("quality") == "good"
+                    and a["consistency"] == "fail"):
                 buckets["boundary_drift"].append(
                     Candidate("boundary_drift", fid, m["mask_id"], cls, bbox, px,
-                               f"{cls}: valid+good, consistency fail -> refine"))
+                               f"{cls}: valid+good, consistency fail -> retained"))
 
             if a["consistency"] == "fail" and m["triage"] == "reject":
                 buckets["depth_support"].append(

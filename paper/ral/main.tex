@@ -1,362 +1,376 @@
-\documentclass[journal]{IEEEtran}
-\pdfminorversion=4
-\IEEEoverridecommandlockouts
+\documentclass[a4paper,twoside]{article}
 
-\usepackage{cite}
-\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{epsfig}
+\usepackage{subcaption}
+\usepackage{calc}
+\usepackage{amssymb}
+\usepackage{amstext}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{multicol}
+\usepackage{pslatex}
+\usepackage{apalike}
+\usepackage{algorithm2e}
+\usepackage[bottom]{footmisc}
+%% Additional packages required by this paper, loaded before SCITEPRESS.sty.
 \usepackage{graphicx}
 \usepackage{textcomp}
 \usepackage{xcolor}
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{url}
-\usepackage[compatibility=false]{caption}
-\usepackage{subcaption}
-\usepackage{orcidlink}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning, shapes, backgrounds, calc, decorations.pathreplacing}
-\usepackage{pgfplots}
-
-% Float separation trimmed from the IEEEtran default to fit the page budget; still
-% well inside what the journal template allows.
-\setlength{\textfloatsep}{10pt plus 2pt minus 2pt}
-\setlength{\dbltextfloatsep}{10pt plus 2pt minus 2pt}
-\setlength{\floatsep}{8pt plus 2pt minus 2pt}
-
-\newcommand{\humancoverage}{1{,}001 of 4{,}110 frames (24.4\,\%), 35{,}984 regions}
-\newcommand{\humansample}{24.4\,\%}
-
-\title{The Limits of Automated Verification for SAM Pseudo-Labels in Camera–LiDAR Segmentation}
-
-\author{Toomas Tahves,~\IEEEmembership{}
-        Mauro Bellone,~\IEEEmembership{}
-        and~Raivo Sell%
-\thanks{T.~Tahves and R.~Sell are with the Department of Mechanical and Industrial
-Engineering, Tallinn University of Technology, Estonia.}%
-\thanks{M.~Bellone is with the FinEst Centre for Smart Cities, Tallinn University of
-Technology, Estonia, and with the Department of Computer Science and Engineering,
-Universitas Mercatorum, Rome, Italy.}}
+\usetikzlibrary{arrows.meta, positioning, shapes, backgrounds}
+\usepackage{SCITEPRESS}     % Please add other packages that you may need BEFORE the SCITEPRESS.sty package.
 
 \begin{document}
-\maketitle
 
-\begin{abstract}
-Vision--language models (VLMs) are increasingly proposed to verify the masks the Segment Anything Model (SAM) produces at pseudo-labeling scale, yet such verifiers are almost always validated against another automated signal.
-Agreement between two automated judges cannot say which of them is right where they disagree, and says nothing about whether the labels they produce train a better model.
-We supply both missing measurements: on the Zenseact Open Dataset a human judges every SAM proposal and every discovery candidate in a frame in one blind pass, so a single pass scores every automated signal at once, and each annotation variant then trains a camera--LiDAR fusion model scored only on frames carrying that human reference rather than a SAM-derived one.
-Only 20.4\,\% of proposals are actually wrong, so a rejection rule buys purity by deleting correct labels --- and a pooled accuracy score rewards whichever rule deletes least, which is the opposite of what downstream training rewards.
-Ranked instead on the two error directions separately, a free per-frame segmentation signal dominates zero-shot VLM triage: it is worth $+3.9$ mIoU, while layering either VLM backend on top gives back three quarters of that gain and leaves the labels indistinguishable from no filtering at all --- for 109--352\,s of GPU time per frame, against the 27\,s a human needs to check the same frame by hand.
-Which of the two backends sits closer to the human inverts by class, so no agreement statistic settles that choice either.
-Object discovery is measurably a boundary editor rather than an object finder: 78.6\,\% of its candidates are rims on objects the pipeline had already segmented, and it costs more than twice what filtering won, three fifths of which is recovered by discarding rims on geometry alone, before any model call.
-Deleting the 5.3\,\% of object pixels a human rejected, at fixed training-set size, is worth $+2.5$ mIoU: label purity, not verification and not volume, is the binding constraint.
-\end{abstract}
+\title{VLM Substitution in Autonomous Driving Data: Per-Class Behavioral Shifts in Scene Annotation}
 
-\begin{IEEEkeywords}
-Data sets for robot learning, semantic scene understanding, deep learning for visual perception, sensor fusion, computer vision for transportation.
-\end{IEEEkeywords}
+\author{\authorname{Toomas Tahves\sup{1}\orcidAuthor{0009-0008-0050-2146}, Mauro Bellone\sup{2,3}\orcidAuthor{0000-0003-3692-0688} and Raivo Sell\sup{1}\orcidAuthor{0000-0003-1409-0206}} \affiliation{\sup{1}Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia} \affiliation{\sup{2}FinEst Centre for Smart Cities, Tallinn University of Technology, Estonia} \affiliation{\sup{3}Department of Computer Science and Engineering, Universitas Mercatorum, Rome, Italy} \email{\{toomas.tahves, mauro.bellone, raivo.sell\}@taltech.ee} }
 
-\section{Introduction}
-\IEEEPARstart{P}{ixel-level} annotations for autonomous driving are expensive, and the Segment Anything Model (SAM)~\cite{kirillov2023sam} has made large-scale pseudo-labeling feasible.
-The challenge is reliability: SAM masks drift at boundaries, hallucinate in texturally uniform regions, and miss small traffic participants, with errors concentrated in safety-critical cyclists, pedestrians, and signs.
-Geometric filtering~\cite{zou2019confidence,lee2013pseudo,jaritz2020xmuda} cannot detect such semantic failures: a mask with a plausible shape but the wrong class passes every geometric check and degrades downstream training.
-Vision--language models (VLMs)~\cite{liu2024llava,wang2024qwen2vl} offer richer semantic priors, and the LLM-as-judge paradigm~\cite{zheng2023judging} suggests they can serve as semantic verifiers over mask proposals.
+\keywords{Multi-Agent Systems, Vision-Language Models, Prompt Engineering, Annotation Pipelines, Semantic Segmentation, Autonomous Driving.}
 
-The difficulty is how such verification is validated.
-A VLM judge is typically scored by how far it agrees with the segmentation signal it is meant to complement, which measures concordance between two automated judges rather than the accuracy of either: when they disagree, agreement statistics cannot say which is right, and when they fail together they look consistent.
-Every design decision that follows is then made against a yardstick that cannot detect a shared error.
+\abstract{
+Vision–language models (VLMs) are now used as multi‑agent judges in large annotation pipelines, where each agent operates under a fixed role, a fixed prompt, and a small output vocabulary.
+When VLM backend models are replaced, then there is no established way to measure where model behaviour changes inside a deployed system.
+We introduce a controlled, per‑agent, per‑class process for backend substitution and apply it to a SAM‑based mask‑verification pipeline on the Zenseact Open Dataset.
+Two open‑weight VLMs, LLaVA‑1.6‑34B and Qwen2.5‑VL‑72B, are run over the same 4{,}110 driving frames and 90{,}176 mask proposals using identical prompts and identical non‑VLM inputs.
+All comparisons are paired at mask level, the triage rule is recomputed once for both runs.
+The two backends agree on only 57.0\% of the judgements about what object the cropped region contains, and the differences are strongly class‑dependent.
+Relative to LLaVA, Qwen rejects far fewer signs and cyclists, yet rejects more vehicles and pedestrians, shifting which classes lose labels rather than the overall rejection rate.
+In the final annotations, 18.8\% of masks (7.5 million pixels) are retained by one backend and removed by the other.
+The largest divergence appears in the step that recovers objects missed by SAM, where the confirmation rate for human candidates drops from 85.9\% to 45.3\% when the backend is changed.
+Reliable deployment therefore requires systematic per‑agent and per‑class validation on identical inputs.
+}
 
-We supply the missing yardstick.
-On the Zenseact Open Dataset (ZOD)~\cite{alibeigi2023zod} we construct a pipeline whose signals are deliberately independent --- a domain-adapted Swin Transformer~\cite{liu2021swin} scoring mask quality, a zero-shot VLM giving an object-level verdict on tight crops, a deterministic LiDAR support check, and a Swin-driven module proposing objects SAM missed --- and then verify a quarter of its flagged partition by hand, every proposal and every candidate in a covered frame judged in one pass with the labeller never told which model produced what.
-Downstream effect is measured by training CLFTv2~\cite{gu2024clft}, a camera--LiDAR fusion model, on each annotation variant under a reference independent of every variant's own labels.
 
-The result is not a better pipeline.
-It is a measurement of what the pipeline was worth, and the measurement is largely negative in a way that is specific and actionable.
-Our contributions are:
+\onecolumn \maketitle \normalsize \setcounter{footnote}{0} \vfill
 
-\begin{itemize}
-  \item \textbf{A human-verified reference for SAM pseudo-labels}, each region carrying the decision every automated signal made about it, so one pass scores all of them and attribution is performed in software rather than asked of the labeller.
-  \item \textbf{An error-budget criterion for annotation rules}, separating masks wrongly kept from masks wrongly deleted, which ranks rules in the opposite order to F1 and in the same order as their downstream effect.
-  \item \textbf{A geometric decomposition of object discovery} showing the stage to be predominantly a boundary editor, quantifying the pixel contamination that results, and identifying a filter that separates the candidate pool for free.
-  \item \textbf{Evidence that cross-model agreement is not a proxy for accuracy}: scored against human verdicts, two open backends invert their ranking by class and their aggregate ordering follows the corpus class mix.
-  \item \textbf{A downstream study under a single admissible reference} with paired bootstrap intervals, a controlled experiment holding training-set size fixed while only human cleaning varies, and \textbf{a cost accounting against human effort}.
-\end{itemize}
+\section{\uppercase{Introduction}}
+\label{sec:introduction}
 
-Except where a cross-model contrast is stated explicitly, all VLM figures in this paper are LLaVA-1.6-34B.
+Delegating judgement to a language model has become a standard part of modern data pipelines.
+The LLM-as-judge pattern~\cite{zheng2023judging} gives a model a narrow evaluative role, limits its output to a small vocabulary, and treats its verdict as one signal among several.
+Vision–language models extend this idea to image data~\cite{liu2024llava,wang2024qwen2vl}, which makes them appealing for annotation auditing: a mask proposal, a crop, a fixed question, and a categorical answer.
 
-\section{Related Work}
-\label{sec:related_work}
+Pipelines built this way inherit an engineering assumption that is rarely checked.
+Because each agent is defined by a role and a prompt rather than by learned weights, the backend looks like a swappable component.
+A practitioner who has validated a pipeline on one open model often expects to switch to a larger or cheaper one by changing a configuration entry.
+Prompt tuning per model is not realistic at annotation scale.
+That different models behave differently is obvious.
+What is missing is a way to measure how differently and where, inside a working pipeline and on a dataset large enough for the answer to matter.
+Substitution is usually reported as a single acceptance or confirmation rate per model, which cannot show which agent changed, which classes moved, or whether a shift came from the model or from a serving failure.
 
-\textbf{Pseudo-labeling and geometric filtering.} Segmentation for driving~\cite{long2015fcn,zhao2017psp,chen2018deeplab}, camera--LiDAR fusion included~\cite{valada2019selfsupervised,jaritz2019multimodal}, depends on pixel-accurate supervision that is expensive at scale.
-Pseudo-labeling and self-training~\cite{lee2013pseudo,zou2019confidence} reduce that cost, and cross-modal consistency~\cite{jaritz2020xmuda} and LiDAR-projection checks~\cite{behley2019semantickitti,caesar2020nuscenes} filter erroneous labels by geometric redundancy, but a fixed threshold cannot detect a semantic error --- and SAM~\cite{kirillov2023sam}, producing class-agnostic proposals without per-class prompts, by the same design cannot verify their semantic correctness, which makes post-hoc validation a necessary complement.
+We build this measurement into a system where backend substitution can be isolated cleanly.
+Three agents act on every SAM~\cite{kirillov2023sam} mask: a geometric consistency check, a segmentation‑quality model, and a crop‑level object‑identity judge.
+A fourth agent recovers objects that SAM misses by issuing class‑specific prompts on regions where the segmentation model and SAM diverge; it is the only one that acts on the frame rather than on a proposed mask.
+Only the two VLM‑based agents change when the backend changes; the consistency check and the segmentation‑quality model are computed once and shared across both runs.
+Running two open‑weight VLM backends over the same 4{,}110 frames produces two annotation sets whose differences can be attributed directly to the VLM, because all non‑VLM inputs are held fixed and verified before comparison.
 
-\textbf{VLM judges and multi-signal filtering.} The LLM-as-judge paradigm~\cite{zheng2023judging} shows language models can evaluate other models' outputs under constrained formats, and VLMs extend it to images~\cite{liu2024llava,ye2023mplug,wang2024qwen2vl}; a complementary line requires agreement between independent classifiers before rejecting a sample~\cite{malach2017decoupling,han2018co}, which motivates the concordance rule we evaluate.
-What this literature does not supply is a human reference at the granularity the decisions are made at: validation is typically model-against-model, and how many correct labels a rule destroys to remove one wrong one is not recoverable from an agreement statistic.
+Our contributions are as follows.
+We design an annotation system in which backend substitution can be isolated cleanly: agent roles, prompts, output vocabularies, and fallback behaviour are specified tightly enough that any change in outcomes can be attributed to the VLM rather than to the surrounding pipeline.
+We introduce a controlled substitution process that measures portability per agent and per class, using paired mask-level comparisons over 90{,}176 mask proposals and 55{,}256 recovery candidates with all non-VLM signals held fixed.
+We show that fixed prompts do not transfer uniformly: the two backends diverge sharply on small and human classes, and the overall acceptance rate hides a 41-point drop in cyclist and pedestrian confirmations.
+Finally, we quantify the operational cost of the larger backend, including retries and reloads triggered by serving degradation, and relate that cost to the annotation distribution it produces.
 
-\section{Method}
-\label{sec:method}
+
+\section{\uppercase{Related Work}}
+
+Language models have increasingly been used as delegated judges in data pipelines.  
+The LLM-as-judge pattern~\cite{zheng2023judging,wu2023llmjudge} shows that a model can evaluate another system’s output when given a structured prompt and a constrained response format, and this idea has already been applied to data annotation~\cite{gilardi2023chatgptannotator,li2023llmannotator,li2023llmdata}.  
+Agent frameworks extend this approach by combining several such roles into pipelines with explicit delegation~\cite{xi2023agents,schick2023toolformer,wang2023voyager}, an idea that also appears in embodied decision-making~\cite{ahn2022saycan,huang2023inner,brohan2023rt2}.  
+Most of this work evaluates the composed system as a whole and assumes that a role specification can be transferred across different models without changing behaviour.
+
+That assumption is weakly supported.  
+Prompt phrasing and format are known to shift model behaviour, and work on instruction form~\cite{wei2022chain} shows that even small changes in wording can alter what a model does.  
+What is missing is a controlled substitution study at deployment scale, where two backends are run with identical prompts and identical non-model inputs, and the comparison is resolved per agent and per class rather than through a single aggregate rate.  
+Research on foundation-model capability surfaces~\cite{bommasani2021opportunities} suggests that substitution is not neutral, but does not measure where these differences appear inside a working system.
+
+Annotation auditing over SAM proposals introduces its own challenges.  
+SAM~\cite{kirillov2023sam} produces class-agnostic masks without per-class prompts, which makes large-scale pseudo-annotation feasible but leaves semantic correctness unchecked.  
+Filtering on confidence or cross-modal geometry~\cite{zou2019confidence,jaritz2020xmuda} cannot detect a plausible mask that carries the wrong class, which motivates the use of a semantic judge.  
+Ensemble-style label-noise methods~\cite{malach2017decoupling,han2018co} further motivate requiring agreement before acting on a rejection.  
+Our system combines these ideas, and this paper examines what happens when the semantic judge itself is replaced.
 
 \begin{figure}[t]
     \centering
-    \resizebox{\columnwidth}{!}{\input{diagrams/architecture_overview.tex}}
-    \caption{The pipeline and where this paper measures it.
-    SAM proposes masks; three signals of deliberately different provenance score each one --- a deterministic LiDAR check, a Swin class map, and a zero-shot VLM on a tight crop --- and a fixed concordance rule fuses them, while a discovery step reads the same Swin map for objects SAM missed.
-    Only the VLM costs a model call per mask, the asymmetry Section~\ref{sec:practice} prices.
-    Stage (4) is the contribution: the human judges the output of stage (3) region by region, so one pass scores every signal drawn here, and stage (5) is what each resulting variant is worth after training.}
+    \resizebox{\columnwidth}{!}{\input{diagrams/backend_substitution.tex}}
+    \caption{
+    The annotation system and the backend substitution setup.
+    All signals above the fork are computed once and reused in both runs, including SAM proposals, the LiDAR consistency check, the segmentation‑quality scores, and the discovery candidates.
+    Only the VLM block changes, so any differences between the two annotation sets come from the backend.
+    Both runs use the same triage rule, applied under one revision, and only rejection removes pixels.
+    }
     \label{fig:architecture}
 \end{figure}
 
-Fig.~\ref{fig:architecture} shows the pipeline; we describe only what is needed to read the results.
-Two further VLM agents exist in the system and are not evaluated here: a correction agent reached only on the refine path, and a diagnostic failure-mode classifier whose output never reaches the triage rule.
-The triage pipeline, the offline replay that produces every annotation variant, and the human-verification analysis are released as open source, with the upstream annotation generator, the downstream fusion trainer, and the processed datasets and training logs.\footnote{\url{https://github.com/taltech-av/paper-vlm-annotation-pipeline}, \url{https://github.com/taltech-av/paper-aim2026-zod-sam-generator}, \url{https://github.com/taltech-av/paper-aim2026-fusion-trainer}, \url{https://app.visin.eu/datasets}, \url{https://app.visin.eu/projects/sam-vlm}}
 
-\subsection{Signals}
+\section{\uppercase{Methodology}}
+\label{sec:methodology}
 
-The \textbf{consistency check} is deterministic and runs first: the fraction of mask pixels carrying projected LiDAR returns must exceed $\tau{=}0.1$, which catches masks leaking into sky or void before any model is called.
-The \textbf{quality agent} is a Swin Transformer~\cite{liu2021swin} trained on 2{,}319 manually curated clean ZOD frames; it emits a per-pixel class map in one forward pass per frame, so per-mask agreement $\alpha$ is read off a prediction the pipeline already has, at no additional cost.
-Thresholds are class-specific, $\tau_q^{\text{large}}{=}0.30$ and $\tau_q^{\text{small}}{=}0.15$, because Swin is stronger on large objects than on cyclists and pedestrians.
-The \textbf{bbox agent} is the one signal that costs a model call per mask: a zero-shot VLM is shown the mask's bounding box as a tight crop and asked to name what it contains from a closed list carrying decoy categories, and the answer reduces to \texttt{valid}, \texttt{background}, or \texttt{invalid}.
-It is not told the expected class and is given neither the overlay nor the depth channel, which is what keeps its verdict independent of the signals it is fused with.
+\subsection{Agents}
 
-\subsection{Deterministic Triage}
-Rejection is destructive --- deleted pixels cannot be recovered --- so instead of weighted scoring we require concordant evidence.
-With $\mathcal{N}=\{\texttt{invalid},\texttt{bad},\texttt{fail}\}$ the negative signals, a mask is \textbf{rejected} on at least two signals in $\mathcal{N}$ (a \texttt{background} verdict counts as two), \textbf{accepted} on three positive signals, routed to \textbf{refinement} when it is valid and of good quality but fails the consistency check (1.4\,\% of masks), and otherwise retained but flagged for \textbf{human review}, so no single erroneous judgment silently deletes a valid label; \texttt{bbox=invalid} paired with \texttt{quality=good} is downgraded to one negative signal to avoid over-rejecting small objects.
-Prompts, thresholds and rules are fixed before evaluation and every outcome traces to explicit agent outputs, so all annotation variants are reproducible offline from stored responses without re-running VLM inference.
+\subsubsection{Consistency agent}
+A deterministic check measures the fraction of mask pixels containing projected LiDAR returns.  
+Masks must exceed $\tau = 0.1$, which removes masks leaking into sky or void regions.  
+This signal is identical across backends.
 
-\subsection{Object Discovery and Candidate Geometry}
-\label{sec:geometry}
-Triage removes false positives but cannot recover objects SAM missed.
-A discovery step compares the Swin class map to the SAM annotation at $384{\times}384$; pixels where Swin predicts a non-background class and SAM predicts background form candidates.
-Components below 20~px are discarded and the largest remaining ones are cropped and confirmed by a class-specific VLM prompt.
-Confirmed regions become new masks, modifying only pixels still labeled background.
+\subsubsection{Quality agent}
+The Quality agent is a CLFTv2 cross‑fusion segmentation model with a SwinV2‑Large backbone, trained on the clean partition and referred to as Swin in the tables.
+It takes the camera image together with the projected LiDAR depth map and predicts a dense class map at $384 \times 384$ once per frame; each mask is then compared to this map through agreement $\alpha$, the fraction of its pixels assigned to its annotated class.
+Thresholds are class‑specific: $\tau_q^{\text{large}} = 0.30$ for vehicles and signs, and $\tau_q^{\text{small}} = 0.15$ for cyclists and pedestrians.  
+Cyclists and pedestrians share one segmentation class, so $\alpha$ measures membership in the merged human class.  
+The module is called an agent only because it produces a binary decision, reporting sufficient agreement when $\alpha \geq \tau_q$ and insufficient agreement otherwise.
+Because it reads LiDAR as one of its two inputs, its verdict is not fully independent of the consistency check, a point the triage rule has to account for.
 
-Because SAM's coverage is subtracted \emph{before} components are formed, this stage produces two geometrically distinct things: a candidate on an object SAM already found is only the rim left over, and the rim never overlaps the mask it surrounds, so a rejected rim is paint applied beside a correct object rather than a harmless duplicate; a candidate on an object SAM missed entirely is the whole object as Swin sees it.
-These are different findings and a pooled precision hides the difference.
-The reliable test asks whether the ring of SAM pixels around a candidate contains a mask of the candidate's \emph{own class}; if it does, the candidate is a rim.\footnote{%
-A cheaper ring-share threshold --- how much of the neighbourhood is SAM-covered at all --- is one-sided in its errors: 97.6\,\% of fringes abut a same-class mask, but so do 33.3\,\% of what it calls standalone.}
-The vocabularies are reconciled first, since SAM proposals carry ZOD's four classes and candidates Swin's three, in which cyclist and pedestrian are one \texttt{human} class; both are folded to the coarser one --- the fold the downstream mIoU uses --- before any class is compared.
+\subsubsection{BBox agent}
+The BBox agent is the VLM-based classifier in the pipeline.  
+It receives only a tight RGB crop and must choose exactly one word from a fixed vocabulary containing the four annotation classes (vehicle, sign, cyclist, pedestrian), the additional class traffic light, four background surfaces (vegetation, building, sky, snow), and three distractors (road, other, unclear).  
+The annotated class is never mentioned in the prompt.  
+An answer matching the annotation is treated as valid, with traffic light also valid for sign.  
+Naming a background surface is treated as background and is strong evidence that the mask covers no object.  
+Any other answer is read as a failure to recognise the annotated object, and a reply that cannot be read at all is treated as recognition.  
+Because it performs a full VLM forward pass for every mask, the BBox agent is the main contributor to inference cost.
 
-\section{The Human Reference}
-\label{sec:human_verification}
+\subsubsection{Discovery agent}
+The Discovery agent recovers objects SAM never proposed and is the only agent that adds pixels rather than removing them.  
+It compares the segmentation map to the SAM annotation at $384 \times 384$ and extracts 8‑connected components where the model predicts an object class on pixels SAM leaves as background.  
+Components smaller than 20 pixels are discarded and the largest 20 per frame are sent to the VLM, a cap that bounds cost per frame.
+Candidate generation reads no VLM output at all, so both backends are offered the same set.
+Each candidate is cropped from the full‑resolution image with padding, upscaled if needed, and passed as a single image.
 
-Mask agreement and downstream mIoU are both indirect measures of annotation quality: the first compares two automated signals to each other, the second passes the annotations through a training run before anything is observed.
-We therefore verify the annotation set directly.
-The job presents every SAM proposal and every discovery candidate of the flagged partition --- 145{,}428 regions over 4{,}110 frames --- painted as pixels in the frame it belongs to, for a human to mark the errors in a single pass.
-It closed at \humancoverage, and every figure below is computed on that closed export.
+Vehicle and sign candidates receive a presence‑confirmation question answerable with the class name or a word declining it.  
+Human candidates receive a three‑way discrimination because the segmentation model merges cyclists and pedestrians while the annotation vocabulary separates them.  
+This asymmetry matters because only human candidates require choosing between two classes rather than confirming one.
 
-\textbf{The realised sample estimates the partition.} Labelling proceeds in job order, which is not stratified by scene content, so rather than assume the sample is random we test the realised subset against the frames never reached.
-It is not distinguishable from a random draw of the same size on weather condition (permutation test, $p{=}0.36$), on cyclist or pedestrian presence ($p{=}0.47$), or on annotated pixel volume per frame ($p{=}0.47$), and its class composition matches to within $0.9$ points on every class.
+A candidate is confirmed only when the reply names an offered class, and unusable replies default to non‑confirmation.  
+This failure convention is the opposite of the BBox agent’s: where an unparseable reply preserves a mask on the BBox path, it silently discards a candidate on this one.  
+Failed candidates are retained and flagged so confirmation rates can be computed over answered candidates rather than over a denominator shrunk by serving faults.  
+Confirmed components are upsampled and painted only onto pixels still marked as background, so discovery never overwrites existing labels and inherits the $384 \times 384$ quantisation of the segmentation map.
 
-\textbf{One property does not average out, and we report it rather than leave it to be discovered.} The standard is \emph{non-stationary}: the share of SAM proposals the labeller accepts falls monotonically with labelling order, by 2.25 points per 100 frames ($r{=}-0.902$), and the second half of the pass is steeper than the first rather than converging.
-It is a change of standard, not of material --- scene composition, mask size and mean Swin agreement are flat across the pass, yet within every fixed band of Swin agreement the acceptance rate still falls, from 95.9\,\% to 91.6\,\% on the most confident band and from 65.2\,\% to 41.8\,\% on the least.
-Two consequences follow.
-Absolute rates pooled over the pass are a mixture over a moving standard, so wherever one carries an argument we give it for the final 200 frames as well.
-And \emph{paired comparisons are immune}, both sides being judged by the same person on the same region at the same moment --- every ranking in this paper rests on one.
+All discovery replies are stored in raw form and re‑parsed with a single parser, so confirmation rates are computed only over candidates the model actually answered.
 
-\textbf{Blindness is structural rather than procedural.} Mask proposals are extracted deterministically, so every run scored the same proposals and a human verdict is run-independent.
-Each region carries the decision every automated source made about it, so one pass scores all of them, and attribution is a join performed afterwards rather than a question put to the labeller.
-Redundancy is one labeller per region by design, the task being a click-what-is-wrong toggle rather than an expert adjudication, so no inter-annotator statistic is available and the drift above is the property of the reference we report in its place.
-The verdicts serve two purposes: a direct precision measurement for each automated decision (Table~\ref{tab:human_agreement}), and a human-verified annotation set that is itself trainable.
 
-\input{tables/manual_verification}
+\subsection{Triage rules}
+\label{sec:triage}
 
-\section{Experiments}
-\label{sec:experiments}
+\subsubsection{Accept}
+A mask is accepted when all three agents agree that it is correct.  
+The BBox agent recognises the annotated object, the Quality agent finds sufficient class agreement, and the consistency check passes.  
+When all signals concur, the mask is written unchanged.
 
-\subsection{Setup}
-A previous annotation campaign inspected every candidate frame and either accepted or discarded it, producing a \emph{clean} partition of 2{,}319 frames, used to train the Swin quality agent, and a \emph{flagged} partition of 4{,}110 frames carrying 90{,}176 SAM proposals, which is the object of study here.
-Frames are grouped into ten strata --- weather condition (day-fair, day-rain, night-fair, night-rain, snow) crossed with rare-class presence --- so that every split mirrors the corpus, with 10\,\% of each stratum held out for validation and a floor of 40 frames per weather category in the test set.
-Two open-weight backends are served via Ollama on a single A100-80GB, LLaVA-1.6-34B~\cite{liu2024llava} and Qwen2.5-VL-72B~\cite{bai2025qwen25vl}, under byte-identical prompts with no per-model calibration.
-Of 4{,}135 flagged frames, 25 could not be annotated cleanly and are excluded; the excluded set is not distinguishable from a random draw of the same size by mask count (permutation test, $p{=}0.30$).
+\subsubsection{Reject}
+A mask is rejected when two of the three agents judge that it is wrong.  
+The BBox agent may say the crop does not contain the annotated object, the Quality agent may say the segmentation does not match the class, and the consistency check may say the mask has insufficient LiDAR support.  
+Any two of these disagreements remove the mask.
 
-\paragraph{Evaluation protocol} Comparing annotation variants requires a reference independent of every variant's own training labels: scoring a model against the pseudo-labels it was trained on measures label self-consistency rather than segmentation quality, and inflates precisely the variants with the most idiosyncratic labels.
-The human pass supplies that reference and dictates the split.
-The 1{,}001 verified frames are the only ones carrying an admissible reference, so they are the ladder's test set and nothing else can be: every variant trains on the 2{,}642 flagged frames with no human labels and is scored on all 1{,}001 that have them.
-Rejected pixels map to \texttt{ignore}; mIoU averages vehicle, sign and human (cyclist $+$ pedestrian) as the mean of the five per-weather mIoUs; uncertainty comes from a paired bootstrap resampling test frames 10{,}000 times within each weather stratum with identical indices for all variants.
+Two cases count as two disagreements immediately.
+If the BBox agent names a background surface, that is direct evidence that the mask covers no object rather than absence of confirmation, so it removes the mask on its own.
+A failure to recognise the object counts twice when the consistency check passes and the Quality agent also withholds support, and counts once when the Quality agent does support the mask, which protects small or ambiguous objects the VLM may misread on a tight crop.
 
-\subsection{Most Proposals Are Already Correct, Which Bounds What Any Filter Can Win}
-\label{sec:human_results}
+Masks with degenerate geometry (extreme aspect ratio or too few pixels for the class) are rejected before any agent is called.
 
-Humans accept 79.6\,\% of the SAM proposals they are shown (Table~\ref{tab:manual_verification}), 68.8\,\% under the final calibration.
-A rejection rule therefore operates on a minority of genuinely wrong masks, and every rule we measure buys purity by deleting correct labels as well.
-Table~\ref{tab:human_agreement} makes the trade-off explicit by keeping the two error directions apart.
-Keeping every proposal has, by construction, a 100\,\% false-accept rate and no false rejects; the Swin threshold cuts false accepts to 23.5\,\% at the cost of deleting 26.7\,\% of the correct masks; VLM triage sits at the opposite end, retaining 54.9\,\% (LLaVA) and 59.5\,\% (Qwen) of the masks a human rejected while deleting 14.1\,\% and 11.4\,\% of the correct ones.
-The Swin threshold is also the rule least disturbed by the drift: between the first and last 200 frames of the pass the base rate fell by 16.7 points, yet its two error rates moved by 2.0 and 6.2.
+Thin or distant objects can trigger both the Quality agent and the consistency check for the same physical reason, since both read LiDAR.  
+Lower thresholds for cyclists and pedestrians reduce this effect but do not remove it.  
+Differences between backends arise mainly from cases where the BBox agent disagrees, because it is the only agent whose judgement changes with the backend.
 
-\textbf{This is where a single accuracy figure misleads.} On F1 the ranking is the reverse of the downstream ranking: keeping everything scores 88.6, above every triage rule, while the Swin threshold scores 81.7.
-Keeping everything scores an F1 equal to the base rate by construction, which is the cleanest demonstration that the metric rewards the rule that deletes nothing.
-The asymmetry F1 pools is real and directional --- a retained wrong mask paints wrong pixels into a training label, whereas a deleted correct mask only leaves those pixels unlabelled --- so annotation rules should be ranked on the two error rates separately, and we do so throughout.
-The same correction applies to the deterministic LiDAR check, whose apparently strong 86.8 F1 is an artifact of passing nearly everything: it retains 93.6\,\% of the masks a human rejected, the worst false-accept rate of any rule measured.
+\subsubsection{Retained, flagged}
+A mask is retained when the agents do not agree strongly enough to delete it.  
+This covers all cases with only one agent in disagreement.  
+The mask is written unchanged, and the disagreement is marked for attention rather than used to remove pixels.  
+For example, a mask that both the BBox agent and the Quality agent support but fails the consistency check has only one dissenting signal and is therefore retained.
 
-\textbf{Errors concentrate where the pipeline is weakest.} Humans reject 33.7\,\% of cyclist and 34.1\,\% of pedestrian proposals against 18.0\,\% of vehicles and 16.2\,\% of signs: the classes with the worst SAM proposals are the safety-critical ones, and also the classes where the Swin quality signal is least reliable.
+\subsection{Dataset}
+\label{sec:dataset}
 
-\textbf{Cross-model agreement is not a proxy for accuracy.} Under byte-identical prompts the two backends return the same verdict on 57.0\,\% of crops, and an agreement statistic can say no more than that.
-Scored against the human instead, Qwen2.5-VL-72B's triage is closer to the human verdict than LLaVA-1.6-34B's by $+0.5$ to $+1.4$ F1 (paired frame-clustered bootstrap; Table~\ref{tab:human_agreement}).
-Split by class the ordering inverts: Qwen leads on signs (88.6 vs.\ 85.4) and cyclists (76.7 vs.\ 71.0) while LLaVA leads on pedestrians (83.2 vs.\ 76.4) and vehicles (89.5 vs.\ 88.6).
-Signs are 50.5\,\% of the judged masks, so the aggregate ordering is set by the class mix of this corpus rather than by a competence ordering that would transfer, and we do not report a cross-model winner without the class breakdown.
-The gap is a function of the reference as well: it was $+1.7$ to $+2.9$ F1 over the first 450 frames and decays as the labeller tightens, because Qwen's advantage sits in signs and signs are the class whose acceptance rate fell most.
-An aggregate cross-model number is a statement about a corpus and a standard together, not about either model.
+This work builds on our earlier SAM-based annotation pipeline \cite{tahves2026samenhancedsegmentationroaddatasets}, which produced masks for all ZOD \cite{alibeigi2023zod} frames and split them into clean and flagged partitions.  
+We revisit those annotations here: the flagged partition is re‑annotated under the multi‑agent system to evaluate and correct the SAM labels and to measure how VLM backend substitution changes those corrections.
 
-\textbf{Rule engineering does not move the operating point.} Inspecting individual triage paths exposes two weaknesses of the rule: unilateral rejection on a bare \texttt{background} verdict, and a LiDAR threshold that is not class-aware.
-Applying both fixes rescues 1{,}002 masks (914{,}277~px, 892 of them signs) under offline replay, but scored against the human verdicts they buy a 1.7-point reduction in masks wrongly deleted at the cost of a 1.8-point rise in masks wrongly kept --- a move along the trade-off curve rather than off it, so we do not train them as a separate variant.
-Every rule we measured within this fixed signal set sits within about a point of its neighbours on both axes: what moves the operating point is which signals are consulted, not how their disagreement is arbitrated.
+The previous pass produced 2,319 clean frames and 4,135 flagged frames (Table~\ref{tab:dataset}).  
+Twenty‑five flagged frames could not be annotated cleanly and are removed, leaving 4,110 frames and 90,176 mask proposals.
 
-\input{tables/ablation}
+The flagged partition contains denser and more difficult scenes: 21.9 masks per frame versus 15.5 in the clean partition, and object pixels covering 3.64\% of the image versus 2.18\% (Table~\ref{tab:dataset_distributions}).  
+Because our comparison is intentionally run on this harder half of the dataset, the verdict rates reported here should not be interpreted as typical for everyday driving scenes.
 
-\subsection{Downstream: the Free Signal Is the Only Filtering Stage That Helps}
+Two composition effects matter for reading the results.  
+Signs make up half of all flagged masks, so backend behaviour on signs dominates any class‑pooled rate.  
+Cyclists and pedestrians are rare: they cover only 0.31\% of flagged‑partition pixels, falling to 0.12–0.14\% at night and in snow.  
+The classes where the two backends diverge most are therefore the ones with the least pixel evidence.
 
-Table~\ref{tab:ablation} reports the nested ladder, in which each step adds exactly one pipeline stage so that any change is attributable to that stage.
+\input{tables/dataset}
+\input{tables/dataset_distributions}
 
-Applying the Swin agreement threshold to raw SAM proposals is worth $+3.9$ mIoU (40.3 $\to$ 44.2, 95\,\% CI $[+2.5, +5.3]$, $P(\Delta\leq0)<10^{-4}$), and the gain is present in all three classes and all five weather conditions.
-It is largest on signs ($+6.8$ IoU) and smallest on vehicles ($+2.1$), matching where SAM's proposals are worst relative to their pixel volume.
-One forward pass per frame, at $<$0.01\,s per mask, buys the entire measurable filtering effect in this study.
-Broken down by weather (Table~\ref{tab:weather_miou}) the margin neither widens monotonically with degradation nor stays flat ($+3.8$ day-fair, $+7.0$ night-fair, $+3.3$ night-rain), so a filter that mainly removed low-visibility label noise is not what these labels contain; the adverse strata are small (29--146 frames), which is why the overall comparison is read off the pooled bootstrap rather than off a mean over the five columns.
+\subsection{Evaluation}
+\label{sec:evaluation}
 
-\input{tables/weather_miou}
+We compare two open‑weight VLM backends, LLaVA‑1.6‑34B \cite{liu2024llava} and Qwen2.5‑VL‑72B \cite{bai2025qwen25vl}, served on identical hardware on the TalTech HPC cluster using an NVIDIA A100\,80GB GPU.
 
-\textbf{Does VLM triage add anything over Swin alone?
-No --- it subtracts.} Both triage variants land significantly below the free signal they are layered on: 41.1 mIoU with LLaVA-1.6-34B ($-3.0$, CI $[-4.5, -1.6]$) and 41.5 with Qwen2.5-VL-72B ($-2.7$, CI $[-4.1, -1.5]$), both with $P(\Delta\geq0)<10^{-4}$ --- three quarters of the $+3.9$ the threshold had bought, given back.
-Neither is distinguishable from doing nothing at all: against unfiltered raw SAM they are $+0.8$ (CI $[-1.0, +2.6]$) and $+1.2$ (CI $[-0.8, +2.9]$).
-Nor are the two backends distinguishable from each other (paired CI $[-0.9, +1.4]$) despite a $3.2\times$ cost difference, so the backends' insensitivity at verdict level survives into the trained model.
+\paragraph{Serving and decoding}
+Both backends are served locally through Ollama, one model resident at a time, as the released tags \texttt{llava:34b} and \texttt{qwen2.5vl:72b}.
+Each call sends the prompt and its images inline to the chat endpoint and asks for a complete response rather than a stream.
+Decoding is greedy: temperature is zero, the context window is 2{,}048 tokens, and generation is capped at ten tokens, which is ample for a one‑word verdict.
+Greedy decoding matters for the comparison, because it makes a run repeatable, so every difference reported below is a difference between models rather than between samples of one.
+Four frames are processed concurrently.
 
-The loss is heaviest where triage deletes most: sign IoU falls 37.8 $\to$ 35.4 (LLaVA) and 33.3 (Qwen) against 69.6 $\to$ 67.5 and 68.5 on vehicles, and both variants fall \emph{below} raw SAM in night-rain (33.1 and 34.4 against 36.4) --- crops are least legible exactly where labels most need protecting.
-A stage costing 109--352\,s of GPU time per frame had to beat 44.2 mIoU to have earned it; it does not reliably beat 40.3.
+\paragraph{Identical inputs}
+Both models annotate the same 4,110 frames and 90,176 masks.
+Each run sees the same mask identifiers, segmentation agreement values, LiDAR support, and discovery candidates.
+Triage is recomputed offline under one rule, so differences arise only from the VLMs.
+Prompts are identical and no per‑model tuning is applied.
+The question is how far a fixed prompt set carries, not how well either model could be made to perform.
 
-\textbf{Discovery is strongly negative, and the human pass had already bounded it.} Adding all Swin-detected discoveries to the Swin-filtered labels costs $-9.4$ mIoU (44.2 $\to$ 34.8, CI $[-10.4, -8.4]$) --- more than twice the size of the filtering gain, and negative even against the unfiltered raw-SAM baseline ($-5.5$, CI $[-6.8, -4.1]$).
-The damage is not confined to the classes discovery adds: vehicle IoU falls 9.0 points and sign 12.6, so the added regions degrade the model globally rather than trading one class against another.
-The deficit is also uniform across weather (Table~\ref{tab:weather_miou}), between 7.4 and 10.3 points in every condition, consistent with a mechanism --- coarse upsampled regions painted into the labels --- that does not depend on visibility.
+\section{\uppercase{Results}}
+\label{sec:results}
 
-Running both stages together costs more than either alone --- 34.7 mIoU with LLaVA and 35.5 with Qwen, $-6.4$ and $-5.9$ against the same backend's triage-only variant --- so discovery dominates the interaction, and the two backends remain indistinguishable at the end of the ladder as they were in the middle of it (paired difference $-0.7$, CI $[-1.4, +0.1]$).
+\subsection{What the agents actually decide}
 
-The discovery rows carry an evaluation caveat the others do not: an object that neither stage ever proposed is absent from the human reference, so a model that segments one is penalised.
-This biases the discovery comparison conservatively, in the direction the mask-level evidence already points, and a $-9.4$ point deficit is far outside what a penalty of that kind can plausibly explain.
+Figure~\ref{fig:qualitative} illustrates the five decision paths produced by the system, together with the agent outputs behind each case.
 
-\input{tables/discovery_geometry}
+(a) Hallucination. SAM proposes a mask where the object is not present, and the BBox agent returns \texttt{background}. Both examples are vehicle masks on roadside vegetation: a rectangular region on a clipped hedge, and a car-shaped region inside a denser one. The Quality Agent independently reports 0.0 percent agreement on both, so two signals concur and the masks are rejected.
 
-\subsection{Discovery Is a Boundary Editor Sold as an Object Finder}
+(b) LiDAR support fails and the mask is kept. The mask covers an articulated bus crossing a wet junction. The BBox agent returns \texttt{valid} and the Quality Agent agrees on 76.1 percent of the mask pixels, but only 4.0 percent of them carry LiDAR returns, below the threshold $\tau = 0.1$. The lower panel shows the outline enclosing almost no points: the bus is distant and the road is wet. One negative signal cannot delete, so the mask is retained unchanged and flagged.
 
-An aggregate precision does not say what a wrong candidate \emph{was}, and the two possibilities carry opposite implications.
-We therefore join every candidate's geometry to the human verdict on it (Table~\ref{tab:discovery_geometry}), asking whether the ring of SAM pixels around it contains a mask of the candidate's own class.
+(c) The same signal fails and the mask is deleted. A pedestrian-shaped statue receives \texttt{valid} from the BBox agent, which sees a human form in the crop, but the Quality Agent finds none of the class inside the mask (0.0 percent) and LiDAR support is 8.4 percent. Two negatives outweigh the single positive and the concordance rule rejects the mask. Panels (b) and (c) are the rule in one picture: the same geometric failure removes pixels only when a second signal agrees with it, which is why no agent can delete alone.
 
-Four out of five candidates (78.6\,\%) are rims on an object the pipeline had already segmented, and two thirds of those rims the human rejected: 52.0\,\% of all candidates are \emph{edge bleed}, a rim on a same-class mask judged not to be the object, against 6.1\,\% that are objects SAM missed entirely and a human confirmed (64.0\,\% and 1.8\,\% under the end-of-pass calibration).
-The stage was designed and described as object recovery; measured against a human it is predominantly boundary editing, and predominantly wrong when it edits.
-The mechanism is visible in the per-class split: vehicles, which SAM finds reliably, yield the most boundary growth --- 39.3\,\% of their candidates and 42.5\,\% of their added pixels --- because on an object the pipeline already has there is nothing left to propose but its edge.
-Fig.~\ref{fig:geometry_cases} shows one candidate from each cell.
+(d) The two judges disagree, in both directions. They read different evidence, which is what makes the disagreement informative: the BBox agent sees only the cropped image and names what is in it, while the Quality Agent reads the segmentation model's per-pixel prediction inside the mask. In the upper panel the mask covers a row of parked motorcycles annotated as \texttt{cyclist}. The segmentation model assigns the class to 98.8 percent of those pixels, yet the VLM answers \texttt{invalid} on a crop that holds several overlapping machines rather than one rider. The lower panel reverses the roles: the mask covers a single pedestrian at a crossing, the VLM answers \texttt{valid}, and the segmentation model recognises the class on only 5.3 percent of the pixels. Neither case deletes anything. A lone negative is one negative, so both masks are retained and flagged, and a real object survives a single wrong verdict from either judge.
 
-\begin{figure}[t]
+(e) Discovery. SAM misses a cyclist and a pedestrian entirely. Both are recovered where the Quality Agent’s dense prediction disagrees with SAM, and the VLM confirms the class of each connected component.
+
+These paths are shared by both backends. The rest of this section shows that running the same prompts through a different backend does not preserve which path a given mask follows.
+
+\begin{figure*}[t]
     \centering
-    \begin{subfigure}[b]{0.235\textwidth}
-        \includegraphics[width=\linewidth]{figures/geom_edge_bleed.png}
-        \caption{Edge bleed (52.0\,\%)}
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_halluc_a.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_halluc_b.png}
+        \caption{Hallucination}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.235\textwidth}
-        \includegraphics[width=\linewidth]{figures/geom_false_alarm.png}
-        \caption{False alarm (15.2\,\%)}
-    \end{subfigure}
-
-    \vspace{3pt}
-    \begin{subfigure}[b]{0.235\textwidth}
-        \includegraphics[width=\linewidth]{figures/geom_boundary_growth.png}
-        \caption{Boundary growth (26.6\,\%)}
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_consistency.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_consistency_lidar.png}
+        \caption{LiDAR fail, kept}
     \end{subfigure}\hfill
-    \begin{subfigure}[b]{0.235\textwidth}
-        \includegraphics[width=\linewidth]{figures/geom_new_object.png}
-        \caption{New object (6.1\,\%)}
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_depthfail.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_depthfail_lidar.png}
+        \caption{LiDAR fail, deleted}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_retain_downgrade.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_retain_quality.png}
+        \caption{Disagreement}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_discovery_cyclist.png}\par\vspace{2pt}
+        \includegraphics[width=\linewidth]{figures/qual_discovery_pedestrian.png}
+        \caption{Discovery}
     \end{subfigure}
-    \caption{One real candidate per cell of Table~\ref{tab:discovery_geometry}: grey with a white outline is a same-class SAM mask the pipeline already had, orange a candidate the human rejected, teal one they kept.
-    (a) a pedestrian SAM had already segmented, with the candidate wrapping the outline; the rim is subtracted from SAM's coverage, so it lies on the background around the person rather than duplicating the mask.
-    (b) a region on empty pavement where no person exists.
-    (c) SAM had the rider's upper body only, so the rim really is the rest of the object.
-    (d) a free-standing sign SAM never proposed.
-    The ring test is local ($9\,$px), so a same-class mask elsewhere in the frame does not make a candidate a rim.}
-    \label{fig:geometry_cases}
-\end{figure}
+    \caption{The five decision paths of the multi-agent system, LLaVA-1.6-34B. Red overlay in (a)--(d) is the SAM mask under review; (b) and (c), lower panels, show LiDAR returns with the mask outlined in green. Cyan overlay in (e) is the Quality Agent's per-pixel prediction that seeds the discovery candidate, drawn with its interior holes filled for legibility; the orange box marks the region confirmed by the VLM.}
+    \label{fig:qualitative}
+\end{figure*}
 
-This also explains why confirming candidates cannot rescue the stage.
-Standalone candidates are 27.3\,\% real before any model sees them, and only 7.4\,\% under the final calibration; confirmation moves that by $+0.2$ points for LLaVA and $+1.4$ for Qwen, within noise of doing nothing.
-On fringe candidates the signal inverts outright: the stratum neither model confirmed is 43.4\,\% real against 34.1\,\% for the stratum both confirmed.
-A gate uninformative on a third of what it is shown and actively misleading on the rest cannot justify one VLM call per candidate --- and because the human judged the candidate region itself, this measurement is free of the SAM-derived reference bias affecting the downstream comparison.
+\input{tables/agent_behavior}
 
-\textbf{Discovery is not useless, and the aggregate hides what it recovers.} The same join isolates 841 candidates --- 0.85 per frame, $\approx$3{,}400 extrapolated --- that a human confirmed as objects SAM never proposed, overwhelmingly signs (662 of 841, 10.7\,\% of sign candidates against 1.7\,\% of vehicle ones).
-What sinks the stage is the exchange rate rather than an absence of finds: 0.85 confirmed recoveries per frame are bought with 9.35 human-rejected regions painted into the same labels, and the ladder scores the net.
+\subsection{The two backends disagree on four crops in ten}
 
-\textbf{In pixels, which is what the loss sees, the contamination is severe.} Candidate counts and painted pixels are different currencies: a rim on a bus and a rim on a distant sign are one candidate each.
-We therefore re-derive what every candidate actually painted by reproducing the pipeline's own operation --- the $384{\times}384$ component map upsampled to full resolution, claiming only pixels triage left as background --- which agrees with the shipped annotation to 108\,px per frame against some 10{,}800 added.
-Discovery adds 10.7\,M pixels to a set already holding 28.5\,M object pixels, inflating the object-pixel budget by 37.5\,\%, and 61.7\,\% of what it adds is material a human marked as not the object --- 6.6\,M px, equal to 23.1\,\% of the object pixels the set held before discovery ran, or one pixel in six of the labels it produces.
-Weighting by pixels moves the balance slightly in discovery's favour, genuine recoveries being larger than average and rising from 6.1\,\% of candidates to 9.3\,\% of added pixels while edge bleed falls from 52.0\,\% to 47.5\,\%.
+Table~\ref{tab:agent_behavior} gives the per-agent comparison. The main result is that portability fails: under identical prompts, the two backends agree on the BBox verdict for only 57.0 percent of masks. A fixed prompt does not define a shared decision boundary.
 
-\textbf{Gating on geometry recovers most of the deficit, which identifies the contamination as its operative cause.} The pixel accounting above is a \emph{sufficient} explanation for the $-9.4$; that it is the operative one is a separate claim, and it is testable without a model call or a human label.
-We therefore train the variant the geometry implies: discard every candidate that abuts a same-class SAM mask at proposal time --- the 78.6\,\% of the pool that Table~\ref{tab:discovery_geometry} shows to be rims --- and paint only what survives.
-It recovers $+5.6$ mIoU against ungated discovery (34.8 $\to$ 40.4, CI $[+4.7, +6.3]$, $P(\Delta\leq0)<10^{-4}$), so roughly three fifths of the deficit was the rim contamination and not some other property of the added regions: a free geometric test applied before any verification buys back more than either VLM backend's triage was worth.
+Qwen is the more permissive mask judge. It returns \texttt{valid} on 70.9 percent of crops, compared to LLaVA’s 62.1 percent as recorded. Qwen’s answered-only rate is 67.2 percent, already above LLaVA’s as-recorded rate. Using inequality~\eqref{eq:default_bound}, the gap on answered masks is at least 5.1 percentage points. LLaVA’s unmeasured defaults can only widen the gap.
 
-It does not, however, rescue the stage.
-Gated discovery is still $-3.8$ mIoU against the free signal alone (CI $[-4.8, -2.9]$) and is indistinguishable from not running discovery at all ($+0.05$ against raw SAM, CI $[-1.6, +1.6]$).
-The gate converts an actively harmful stage into one that is merely not worth its inference budget --- a real improvement for a practitioner already committed to running it, and not an argument for adding it.
+More importantly, the difference is not uniform. Compared to LLaVA, Qwen rejects far fewer signs (10.8 percent vs.\ 26.0 percent) and cyclists (33.3 percent vs.\ 46.5 percent), but rejects more vehicles (16.3 percent vs.\ 5.1 percent) and pedestrians (35.4 percent vs.\ 16.9 percent). The decision boundary shifts differently for each class. A single acceptance rate hides this redistribution, and for safety-critical annotation tasks the class-level differences matter most.
 
-\input{tables/cleaning_contrast}
+These differences propagate into the labels. Recomputed under one rule, 40.3 percent of masks receive a different triage outcome under the two backends. Of those, 16,985 masks, or 18.8 percent of the corpus and 7.5 million object pixels, are retained by one backend and rejected by the other. Since only rejection removes pixels, this is the quantity inherited by any model trained on these annotations. Roughly one mask in five appears in one annotation set and disappears in the other, depending solely on which backend was configured.
 
-\subsection{Human Cleaning Pays Out of Proportion to Its Size}
+Figure~\ref{fig:flips} shows four of these masks. The pixels, the Swin agreement, and the LiDAR support are identical in the two runs; the BBox verdict is the only thing that changes. Panels (a) and (b) are masks LLaVA retains and Qwen deletes, drawn from the two classes Qwen rejects more often; (c) and (d) reverse the direction, on the two classes LLaVA rejects more often. Neither backend is ground truth here, so the figure is not evidence about which verdict is right. What it shows is that one fixed prompt places the boundary in a different position for each class, and that the disagreement is large enough to be visible on individual objects rather than only in aggregate.
 
-The ladder cannot answer whether human cleaning itself helps, because the human labels cover 1{,}001 frames and the automated variants 4{,}110, so a human row inside it would confound label quality with annotation volume.
-Table~\ref{tab:cleaning} gives that question its own controlled experiment, in which both arms train on the same 651 frames and differ in exactly one field: whether the masks the human rejected are erased or kept.
-The intervention is deliberately small --- deleting them removes 5.3\,\% of the object pixels, and adds nothing --- yet its paired bootstrap difference is $+2.5$ mIoU (36.3 $\to$ 39.0, CI $[+0.7, +4.0]$, $P(\Delta\leq0)=0.003$).
-For scale, as an order-of-magnitude remark rather than a paired comparison, erasing one object pixel in twenty is worth about two thirds of what the Swin filter is worth on a training set four times larger.
+\begin{figure*}[t]
+    \centering
+    % [t] alignment, not [b]: the subcaptions differ in height, and with [b] the
+    % panels would sit at different heights to keep their captions level. The
+    % wider gap between (b) and (c) separates the two directions of the flip.
+    \begin{subfigure}[t]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_flip_pedestrian.png}
+        \caption{Billboard: Qwen deletes}
+    \end{subfigure}\hfill
+    \begin{subfigure}[t]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_flip_vehicle.png}
+        \caption{Bus: Qwen deletes}
+    \end{subfigure}\hspace{5mm}
+    \begin{subfigure}[t]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_flip_cyclist.png}
+        \caption{Cyclist: LLaVA deletes}
+    \end{subfigure}\hfill
+    \begin{subfigure}[t]{0.235\textwidth}
+        \includegraphics[width=\linewidth]{figures/qual_flip_sign.png}
+        \caption{Sign: LLaVA deletes}
+    \end{subfigure}
+    \caption{Four of the 16{,}985 masks that one backend keeps and the other deletes, with the deleting backend named under each panel. Every input is shared: the same SAM mask, the same Swin agreement $\alpha$, and the same LiDAR support, all verified bit-identical across the runs (Section~\ref{sec:evaluation}), so the BBox verdict is the only difference. Left pair, the classes Qwen rejects more often: (a) LLaVA \texttt{valid}, Qwen \texttt{invalid}, $\alpha = 0.0\%$; (b) LLaVA \texttt{valid}, Qwen \texttt{background}, $\alpha = 84.4\%$. Right pair, the classes LLaVA rejects more often: (c) Qwen \texttt{valid}, LLaVA \texttt{invalid}, $\alpha = 99.3\%$; (d) Qwen \texttt{valid}, LLaVA \texttt{invalid}, $\alpha = 88.7\%$. In (b)--(d) a backend deletes a mask whose pixels the segmentation reference assigns to the annotated class; in (a) the mask covers a person printed on an advertising hoarding, which the reference also declines and only LLaVA accepts.}
+    \label{fig:flips}
+\end{figure*}
 
-The lower block of Table~\ref{tab:cleaning} is the more informative half, because it reads each class's IoU change against the share of that class the human deleted --- the dose that class received.
-The three doses differ by a factor of six and the response follows them: vehicle, at a 3.5\,\% deletion rate, moves $+0.9$ IoU, while sign (12.2\,\%) moves $+3.4$ and the human classes (20.9\,\%) $+2.4$.
-The heavily-cleaned classes gain three to four times what the lightly-cleaned one does, so the aggregate is not a diffuse regularisation effect but a response localised to where the deletions were.
-That sign gains slightly more than the human classes despite a smaller dose is consistent with the corpus class composition rather than with a reversal, signs being 50.5\,\% of judged masks; the direction and the ordering against dose are what this experiment supports, not the exact per-class magnitudes.
-Label \emph{purity} rather than \emph{volume} is therefore the binding constraint at this dose --- the arms differ by 5.3\,\% of object pixels, and the result does not extrapolate to an arm in which every mask was redrawn rather than deleted.
+\input{tables/agent_performance}
 
-\subsection{Where Annotation Effort Should Go}
-\label{sec:practice}
+Table~\ref{tab:agent_performance} compares each backend to the Quality Agent. This is not ground truth, so the table does not indicate correctness. It measures how far each backend’s decision boundary lies from a fixed reference. LLaVA is the more balanced judge (precision 72.0, recall 71.1, F1 71.5). Qwen has higher recall and lower precision (69.0, 77.8, F1 73.1), consistent with its verdict distribution. Restricting Qwen to answered masks raises precision to 75.6 and accuracy to 67.5, showing how much of its permissiveness comes from default substitution rather than the model itself.
 
-\textbf{Verification cost must be compared against human cost, not against zero.} Annotating the flagged partition cost 132.3 GPU-hours with LLaVA-1.6-34B and 426.9 with Qwen2.5-VL-72B, a median 109\,s and 352\,s per frame.
-A human judging every proposal in a frame, presented as pixels and toggled in one pass, takes 27\,s per frame at the median, $\approx$31--42 hours for the whole partition.
-Per frame the large VLM therefore spends $\approx$13$\times$ more machine time than the human spends human time ($\approx$4$\times$ for the 34B model), while the human is by construction the reference the VLM is scored against.
-Zero-shot verification at this scale is not a cheap approximation of human verification; on this corpus it is the expensive option.
+\subsection{Portability fails per-agent, not per-model}
 
-\textbf{Keep the deterministic quality signal; do not deploy VLM triage as an automatic filter.} It is the only automated stage with a positive downstream effect, it dominates VLM triage on the false-accept axis (23.5\,\% vs.\ 54.9\,\%), and its operating point does not move as the reference tightens.
+The three discovery prompts make this clear. Given the same 55,256 candidates, the two backends confirm at nearly the same rate over answered candidates: 82.4 percent for Qwen and 83.9 percent for LLaVA. Qwen is slightly more permissive on the vehicle prompt (87.6 percent vs.\ 83.0 percent) and the sign prompt (89.3 percent vs.\ 84.2 percent). A study reporting only one confirmation rate per model would conclude that the two backends behave similarly.
 
-\textbf{Gate discovery on geometry, which is free, rather than on a second VLM, which is not.} The corrective is not a better confirmer but a cheaper filter applied earlier: whether a candidate is a rim is decidable from geometry alone, with no model call and no human label, and trained it is worth $+5.6$ mIoU over ungated discovery --- more than either backend's triage was worth in either direction.
-A practitioner already committed to discovery should apply it at proposal time; one who is not should not add the stage, since even gated it does not separate from skipping it entirely.
+The divergence appears entirely in the human prompt. When the candidate must be classified as cyclist or pedestrian, Qwen confirms only 45.3 percent of candidates, compared to LLaVA’s 85.9 percent. This produces 3,506 human objects under Qwen and 6,376 under LLaVA, from identical candidate regions. The 41-point gap is concentrated on the two classes the pipeline can least afford to lose. The failure arises from the task encoded by the prompt, not from the model’s general capability: the same backend is more permissive on the two presence-check prompts.
 
-\textbf{Spend the freed budget on human verification, targeted by mask rather than by frame.} Ranking masks by the free Swin signal reaches 44.0\,\% of all human-rejected masks within the top 20\,\% of masks, against 20.0\,\% for random order (Table~\ref{tab:review_targeting}); adding the large VLM as a \emph{ranker} rather than a decision-maker raises that only to 47.1\,\% and only at small budgets, at one crop call per mask.
-Spending the budget on whole frames is far weaker --- 88\,\% of frames hold at least one rejected mask, so frame-level ranking barely separates (25.2\,\% vs.\ 19.9\,\% random at 20\,\%).
-Errors are spread thin across frames and concentrated within them, which argues for mask-level review queues, and class priority follows the same evidence: the low-Swin subset of the cyclist and pedestrian classes is 55\,\% of their masks while holding 81\,\% of their errors.
+Taken together, the two VLM agents fail in different ways under the same prompt set. The BBox agent transfers with a class-redistributed boundary, and the discovery agent transfers on two prompts but collapses on the third. No per-model summary statistic captures these differences. Portability must be validated per agent and per class, on identical inputs, or it is not validated.
 
-\input{tables/review_targeting}
+\input{tables/discovery_gate}
 
-\textbf{A confirm-or-reject stage cannot repair a boundary.} The structural limit behind all of the above is that every automated stage here can only delete a mask or add a coarse one, with no mechanism to redraw a boundary.
-Pipelines aimed at pseudo-label quality should therefore invest in correction mechanisms, whether SAM re-prompting or human redrawing, rather than in further verification rules, whose ceiling is set by the 20.4\,\% of proposals that are wrong to begin with.
+\subsection{What the divergent agent contributes}
+\label{sec:human}
 
-\subsection{Limitations}
+The preceding comparison is between two backends, not against truth, so it establishes that the discovery gate is not portable without establishing that it is worth porting. Because the candidate set is generated by the segmentation model and is VLM-free, that second question has a control built into it: painting every candidate is what the pipeline would do with no VLM at all. We labeled a subset of candidates against a human reference and compared the two.
 
-The reference drifts (Section~\ref{sec:human_verification}), which bounds what any absolute rate measured against it can mean.
-It is one annotator's work, so a downstream gap says a model agrees more closely with that annotator on held-out frames, not that it is closer to a neutral ground truth.
-An object neither SAM nor discovery ever proposed is absent from it, so a model that segments one is penalised --- a bias running only against the discovery variants.
-The interface records a rejection without its reason, so we cannot report what share turn on boundary quality.
-Each ladder row is a single training run, so its interval covers test-frame resampling and not training stochasticity.
-And the geometry gate is one trained variant at one threshold: we do not sweep the ring radius or the class-fold, so the $+5.6$ is one point on an unmapped curve.
+A human labeler judged 13,695 of the 55,252 candidates, drawn from 1,001 of the 4,110 frames, marking each as a real object of the proposed class or not. Candidates divide into two kinds that must not be pooled. A \emph{standalone} candidate covers a region where SAM segmented nothing, so confirming it recovers an object the pipeline would otherwise have missed. A \emph{fringe} candidate is a rim on an object SAM had already segmented, so confirming it extends a boundary rather than recovering anything, and 70.3 percent of all candidates are of this kind. A pooled precision would read as recovered objects while being mostly boundary growth.
 
-\section{Conclusion}
+Table~\ref{tab:discovery_gate} gives the result, and it is largely negative. On standalone candidates, 27.3 percent of which are real objects before any confirmation, LLaVA's gate raises precision by 0.24 percentage points, an interval spanning zero, while discarding 32 percent of the candidates. Qwen's raises it by 1.43 points while discarding 26 percent. On fringe candidates both gates are worse than no gate at all: LLaVA moves precision by $-0.48$ points and Qwen by $-0.89$, both intervals excluding zero. The candidates the models decline are, on that kind, marginally more likely to be real than the ones they confirm.
 
-We built a human reference over every SAM proposal and every discovery candidate of a flagged partition, in one blind pass whose verdicts score every automated signal at once, and used it to audit a multi-signal refinement pipeline.
-Because only 20.4\,\% of proposals are actually wrong, verification is a purity--volume trade-off rather than a free improvement, and the metric normally used to rank such rules orders them backwards: F1 rewards whichever rule deletes least, the opposite of what a downstream loss rewards.
-Scored on the two error directions separately, a free per-frame segmentation signal dominates zero-shot VLM triage on the direction that matters and is worth $+3.9$ mIoU downstream, while layering either VLM backend on it costs $-3.0$ and $-2.7$ and leaves labels indistinguishable from unfiltered SAM.
-Nor is the choice between those backends settled by how far they agree: scored against the human their ranking inverts by class and their aggregate ordering follows the corpus class mix, so an agreement statistic answers a question about a corpus and a standard rather than about either model.
+The two findings compose into something sharper than either alone. This is the agent on which backend substitution has its largest effect, a 41-point swing that moves 2,870 human objects between annotation sets, and it is also an agent whose verdict is worth at most one point of precision over ignoring it. A cross-model comparison localises where a substitution changes the labels; it cannot say whether the changed labels are better, and here the component that changes most turns out to contribute least. Both questions have to be asked, and only the second one needs a human.
 
-The object-discovery stage fails in a way its aggregate precision conceals.
-Joining candidate geometry to human verdicts shows it recovers 841 genuine objects here, but they are 6.1\,\% of what it proposes, against 78.6\,\% rims on objects already segmented of which two thirds a human rejected.
-In pixels the contamination explains the $-9.4$ mIoU it costs on its own, and it is the \emph{operative} cause rather than merely a sufficient one: discarding candidates that abut a same-class mask --- a geometric test needing no model call and no human label --- recovers $+5.6$ of the 9.4 points, more than either backend's triage was worth.
-It does not make the stage pay, since gated discovery still does not separate from skipping discovery altogether, but it is the one clearly actionable fix this audit produces.
+Two limits apply, and the second bears on how the numbers should be read. Coverage is 24.4 percent of frames and a single labeler. More importantly, the labeler's strictness has not stabilised: at 10.9 percent coverage the standalone base rate stood at 60.1 percent against 27.3 percent here, so the absolute rates are provisional. Within one export the lift is paired, since both backends are scored on identical candidates by the same labeler. Across the campaign it is not stationary, and it has moved in one direction: Qwen's standalone lift was 5.3 points at the earlier coverage and is 1.43 points now. The magnitude reported here is therefore best read as an upper bound that has shrunk as the reference tightened, which makes the negative conclusion conservative rather than fragile. The fringe inversion has held at both coverages.
 
-Against all of this, deleting the 5.3\,\% of object pixels a human rejected, at fixed training-set size, is worth $+2.5$ mIoU, with a per-class response tracking the per-class deletion dose: label purity is the binding constraint and human deletion is the cheapest way to buy it.
-Future work follows from the limits reached rather than the successes --- a protocol that pins the labelling standard rather than more labelling under a drifting one, a sweep of the geometric gate we have mapped at a single operating point, and correction mechanisms that can redraw a boundary, for which confirmed boundary growth at 10.8\,\% of object pixels already supplies a target.
+\input{tables/timing}
 
-\section*{Acknowledgement}
-Funded by the European Union's Horizon 2020 Programme under grant No.~856602 (Finest Twins) and Horizon Europe under grant No.~101135988 (PLIADES).
+\subsection{What the larger backend costs, and what it buys}
 
-\bibliographystyle{IEEEtran}
-\bibliography{references}
+Table~\ref{tab:timing} reports deployment cost. The BBox agent dominates runtime: 3.54 seconds per call for LLaVA and 11.39 seconds for Qwen. Since it is invoked once per mask, per-mask latency scales with model size. Annotating the 4,110 frames required 132.3 GPU-hours with LLaVA and 426.9 GPU-hours with Qwen, a factor of 3.2. Wall-clock time at four concurrent workers was 33.1 hours versus 106.7 hours. The Qwen figure includes retry and reload traffic caused by the health monitor described earlier. Estimated VRAM usage is about 22 GB for LLaVA and 51 GB for Qwen, both fitting within a single A100-80GB.
+
+Against that cost, the larger backend is less selective, has slightly lower confirmation rates in aggregate, and differs by 41 points on the human discovery prompt. The 3.2 times increase in cost produces a different annotation distribution, not a better one on any metric measured here. On the one component where a human reference is available, the extra cost buys at most 1.4 points of precision on the candidates that matter and a small loss on the ones that do not (Section~\ref{sec:human}). Whether the mask-triage path repays its cost remains open, and would need the same treatment.
+
+\section{\uppercase{Conclusion}}
+
+We treated the VLM backend of a multi‑agent annotation system as the variable under study, while keeping prompts and all non‑model inputs fixed across 4,110 frames and 90,176 mask proposals.  
+The goal was not simply to show that two backends differ, but to reveal how those differences appear inside a working pipeline. The results show that the differences are not uniform across agents and cannot be summarised by a single acceptance rate per model. This is precisely why localisation matters.
+
+The two backends agree on 57.0 percent of mask‑level verdicts. One backend redistributes its rejections across classes rather than shifting selectivity uniformly, rejecting more vehicles and pedestrians while protecting signs and cyclists. The discovery agent behaves similarly on the two presence‑check prompts, yet diverges sharply on the prompt that requires a three‑way discrimination, with a 41‑point drop on the cyclist–pedestrian decision. Neither difference is visible in a pipeline-level acceptance rate.
+
+A single acceptance rate per model would have suggested that the discovery agent transfers cleanly, even though one of its prompts collapses. This is the practical point: portability must be validated per agent and per class, on identical inputs, or it is not validated. A pipeline‑level comparison cannot localise a failure, and an aggregate rate can hide a reversal.
+
+Localisation is necessary and not sufficient. Against a human reference on the one component whose candidate set is model‑independent, the agent that diverges most between backends turns out to be worth at most 1.4 percentage points of precision over confirming nothing, and on the majority kind of candidate its verdict is marginally worse than no verdict. Substitution analysis says where the labels change; it takes a reference to say whether the change is worth having, and the two answers need not agree about which component matters.
+
+Two practices follow. First, evaluate portability at the level of individual agents and classes rather than at the level of the pipeline. Second, store response provenance alongside every verdict, including whether the model answered, declined, replied outside the vocabulary, or returned no content. Without provenance, a safe‑default policy can silently convert serving faults into apparent model behaviour. In our case, this produced a plausible but entirely incorrect account of one model’s scepticism until the raw responses were re‑parsed. The fault is invisible in the verdicts themselves and obvious the moment a content-free response is recorded as something other than an answer.
+
+The larger backend required roughly 3.2 times more inference time and produced a different annotation distribution rather than a better one. It did not buy portability.
+
+\section*{\uppercase{Acknowledgements}}
+
+\begin{itemize}
+  \item Conflicts of Interest: The authors declare no conflicts of interest or competing interests.
+  \item Financial and Other Support: This work was funded by the European Union’s Horizon 2020 Programme under grant No.\ 856602 (Finest Twins) and Horizon Europe under grant No.\ 101135988 (PLIADES).
+  \item Data Sharing: The agent implementations, verbatim prompts, and stored model responses used to compute every rate in this paper are available at \url{https://github.com/taltech-av/paper-vlm-annotation-pipeline}. Because responses are stored verbatim, all reported rates can be re‑derived offline without re‑running VLM inference.
+  \item AI Tools: Claude Code (Anthropic) assisted with implementing the annotation pipeline, analysis scripts, and with drafting and editing the text. All experiments were designed and executed by the authors, and all results, figures, and claims were verified by the authors, who take full responsibility for the content.
+\end{itemize}
+
+
+\bibliographystyle{apalike}
+{\small
+\bibliography{references}}
 
 \end{document}

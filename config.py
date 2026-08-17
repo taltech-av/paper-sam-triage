@@ -53,10 +53,12 @@ def use_hpc():
     """Switch all data paths to HPC. Call before any I/O."""
     global DATA_ROOT, CAMERA_DIR, LIDAR_DIR, ANNOTATION_SAM_DIR
     global ZOD_DATA_ROOT, FUSION_DIR, SWIN_CFG_PATH, SWIN_CKPT_PATH, WORKERS
-    global DISCOVERY_MAX_CANDIDATES, VLM_TIMEOUT
-    WORKERS = 4
-    DISCOVERY_MAX_CANDIDATES = 20   # HPC GPU responds faster, can handle more per frame
-    VLM_TIMEOUT = 120               # larger models (72B/90B) need more time per call
+    # Only paths and throughput belong here. Anything that changes what a run
+    # *contains* — thresholds, candidate caps, vocabularies — stays a module
+    # constant, so the same code produces the same annotations on either
+    # machine. DISCOVERY_MAX_CANDIDATES used to be set here and silently made
+    # local runs unable to reproduce the published candidate set.
+    WORKERS = 4                     # matches the wall-clock figure reported in the paper
     DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
     FUSION_DIR = Path("/gpfs/mariana/smbhome/totahv/fusion-training")
     _swin_model_dir = Path("/gpfs/mariana/smbhome/totahv/models/swin")
@@ -110,12 +112,12 @@ CLASS_COLORS_BGR = {
 _ollama_host = os.environ.get("OLLAMA_HOST", "localhost:11434")
 OLLAMA_URL = _ollama_host if _ollama_host.startswith("http") else f"http://{_ollama_host}"
 OLLAMA_MODEL = "qwen2.5vl:7b"
-VLM_TIMEOUT = 120          # seconds per call (local 7B; use_hpc() raises to 120 for 72B/90B)
+VLM_TIMEOUT = 120          # seconds per call — sized for the 34B/72B backends
 VLM_MAX_RETRIES = 1
 
 # --- Parallelism ---
-# Local: 1 worker keeps Ollama calls sequential — no queue build-up, no timeouts.
-# HPC: use_hpc() raises this to 16; the dedicated A100 can handle concurrent calls.
+# Throughput only — this changes how long a run takes, never what it produces.
+# use_hpc() sets 4, which is the figure the paper's wall-clock timings assume.
 WORKERS = 8
 
 # --- Object discovery (Swin-detected regions absent from annotation_sam) ---
@@ -123,9 +125,12 @@ WORKERS = 8
 # Corresponds to ~80 px in the 768px camera image.
 DISCOVERY_MIN_PIXELS = 20
 # Max VLM confirmation calls per frame (largest candidates first).
-# 4 workers × 10 candidates = 40 max concurrent Ollama calls — within safe limits.
-# On HPC with faster GPUs this can be raised; 10 is a conservative default.
-DISCOVERY_MAX_CANDIDATES = 10
+# This is not a tuning knob: it fixes the candidate set, so changing it changes
+# which objects can be discovered at all. Both published runs used 20, giving
+# the 55,256 candidates the paper reports, and it must stay 20 to reproduce
+# them. It is deliberately not overridden in use_hpc() — a value that decides
+# what the results contain cannot depend on which machine the run lands on.
+DISCOVERY_MAX_CANDIDATES = 20
 
 # --- Swin quality agent ---
 FUSION_DIR = Path("/mnt/ml/projects/fusion-training")

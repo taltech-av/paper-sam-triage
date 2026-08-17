@@ -25,10 +25,6 @@ class MockClient(VLMClient):
             return ["vehicle", "vegetation", "sign", "pedestrian"][idx]
         if "GOOD or BAD" in prompt:
             return ["good", "bad", "good", "good"][idx]
-        if "BOUNDARY_DRIFT" in prompt:
-            return ["boundary_drift", "hallucination", "occlusion_miss", "fragmentation"][idx]
-        if "REFINE or NO_REFINE" in prompt:
-            return ["refine", "no_refine", "refine", "no_refine"][idx]
         if "PASS or FAIL" in prompt:
             return ["pass", "fail", "pass", "pass"][idx]
         return "unknown"

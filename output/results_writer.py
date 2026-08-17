@@ -29,8 +29,6 @@ def write_frame_result(
             "agents": {
                 "bbox": result.bbox_out,
                 "quality": result.quality_out,
-                "failure_mode": result.failure_mode_out,
-                "correction": result.correction_out,
                 "consistency": result.consistency_out,
             },
             "scores": {

@@ -63,9 +63,11 @@ def load_results(results_dir: Path) -> list[dict]:
 # definition counts both as degenerate — so the same run could be called clean
 # by the analysis and aborted by the monitor.
 
-# Agents whose output core.triage.decide() actually reads. A degenerate answer
-# from one of these changes the stored verdict; failure_mode is recorded but
-# never consulted, so degrading it costs nothing.
+# Agents whose output core.triage.triage() actually reads, so a degenerate
+# answer from one of them changes the stored verdict. `correction` is listed for
+# archived runs only: the agent has been removed, and its verdict never altered
+# an annotation even when it answered, but a run that predates the removal is
+# still scored on the basis its own pipeline used.
 VERDICT_AGENTS = {"bbox", "quality", "consistency", "correction"}
 
 
@@ -465,7 +467,7 @@ confirmed by VLM across the {F} frames ({r['disc_confirmed']/F:.1f} per frame)."
     rows = [("accept",       acc, "Mask is valid — kept as-is"),
             ("reject",       rej, "Mask removed  — pixels zeroed"),
             ("human_review", rev, "Single signal — kept, flagged for review"),
-            ("refine",       ref, "Geometrically off — kept, flagged for correction")]
+            ("refine",       ref, "Archived runs only — kept, same pixels as review")]
     for label, v, desc in rows:
         print(f"  {label:15s} {v:5d}  {pct_plain(v,N):6s}  {bar(v,N,28)}  {desc}")
     print(f"  {'kept total':15s} {kept:5d}  {pct_plain(kept,N):6s}")

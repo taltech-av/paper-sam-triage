@@ -13,14 +13,12 @@ Pipeline per mask:
   3. BBox agent (VLM)           — object presence on the zoomed crop
   4. Quality agent (VLM)        — mask/object alignment on the overlay crop
      (skipped when bbox=invalid AND consistency=fail — already 2 negatives)
-  5. Correction agent (VLM)     — only on the refine path (good + fail)
-  6. core/triage.py             — concordance rules → accept/refine/reject/review
+  5. core/triage.py             — concordance rules → accept/reject/review
 
 Usage:
     python process_frames.py
     python process_frames.py --resume --limit 20
     python process_frames.py --mock --limit 3
-    python process_frames.py --diagnose          # run failure-mode agent on negatives
     python process_frames.py --workers 4         # parallel frame workers (default 4)
 """
 
@@ -39,8 +37,6 @@ import config
 from agents.base import AgentOutcome
 from agents.bbox_agent import BBoxAgent
 from agents.consistency_agent import ConsistencyAgent
-from agents.correction_agent import CorrectionAgent
-from agents.failure_mode_agent import FailureModeAgent
 from agents.quality_agent import QualityAgent
 from core.bundle import build_bundle, Bundle
 from core.mask_extractor import MaskProposal, extract_proposals
@@ -83,8 +79,6 @@ def build_agents(vlm: VLMClient, swin_agent=None, monitor=None) -> dict:
         "bbox": BBoxAgent(vlm, monitor),
         "quality": swin_agent if swin_agent is not None else QualityAgent(vlm, monitor),
         "consistency": ConsistencyAgent(),       # deterministic, no VLM
-        "correction": CorrectionAgent(vlm, monitor),
-        "failure_mode": FailureModeAgent(vlm, monitor),   # diagnostic only
     }
 
 
@@ -136,7 +130,7 @@ def _outcome(agent, bundle: Bundle) -> AgentOutcome:
     return AgentOutcome(agent.run(bundle))
 
 
-def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
+def triage_mask(agents: dict, bundle: Bundle,
                 swin_score: float | None = None) -> TriageResult:
     """Run the full agent cascade on one mask — all agents always called."""
     elapsed: dict[str, float] = {}
@@ -165,23 +159,11 @@ def triage_mask(agents: dict, bundle: Bundle, diagnose: bool,
     quality_out, elapsed["quality"] = _timed(
         lambda: verdict("quality", _outcome(agents["quality"], bundle)))
 
-    correction_out = None
-    if bbox_out == "valid" and quality_out == "good" and consistency_out == "fail":
-        correction_out, elapsed["correction"] = _timed(
-            lambda: verdict("correction", _outcome(agents["correction"], bundle)))
-        vlm_calls += 1
-
-    result = triage(bbox_out, quality_out, None, correction_out, consistency_out)
+    result = triage(bbox_out, quality_out, consistency_out)
     result.swin_score = swin_score
     result.swin_bypass = swin_bypass
     result.agent_elapsed = elapsed
     result.vlm_calls = vlm_calls
-
-    if diagnose and result.decision in (TRIAGE_REJECT, TRIAGE_REVIEW):
-        result.failure_mode_out, elapsed["failure_mode"] = _timed(
-            lambda: verdict("failure_mode", _outcome(agents["failure_mode"], bundle)))
-        vlm_calls += 1
-
     result.parse_failed = failures or None
     return result
 
@@ -260,7 +242,6 @@ def process_frame(
     vlm: VLMClient,
     ann_out_dir: Path,
     results_out_dir: Path,
-    diagnose: bool,
     swin_agent=None,
     discovery_agent=None,
     monitor: VLMHealthMonitor | None = None,
@@ -322,23 +303,22 @@ def process_frame(
             n_auto += 1
             triage_results.append(TriageResult(
                 decision=verdict,
-                bbox_out=None, quality_out=None, failure_mode_out=None,
-                correction_out=None, consistency_out=None,
+                bbox_out=None, quality_out=None, consistency_out=None,
                 swin_score=swin_score, lidar_support=lidar_support,
             ))
             mask_elapsed.append(round(time.perf_counter() - t_mask, 4))
             continue
 
-        result = triage_mask(agents, bundle, diagnose, swin_score=swin_score)
+        result = triage_mask(agents, bundle, swin_score=swin_score)
         result.lidar_support = lidar_support
         triage_results.append(result)
         mask_elapsed.append(round(time.perf_counter() - t_mask, 4))
 
     triage_elapsed = round(time.perf_counter() - frame_start, 4)
     counts = {d: sum(1 for r in triage_results if r.decision == d)
-              for d in (TRIAGE_ACCEPT, "refine", TRIAGE_REJECT, TRIAGE_REVIEW)}
+              for d in (TRIAGE_ACCEPT, TRIAGE_REJECT, TRIAGE_REVIEW)}
     tqdm.write(
-        f"  {frame_id}  accept={counts['accept']} refine={counts['refine']} "
+        f"  {frame_id}  accept={counts['accept']} "
         f"reject={counts['reject']} review={counts['human_review']}  "
         f"auto={n_auto}/{len(proposals)}  ({triage_elapsed:.1f}s)"
     )
@@ -422,8 +402,6 @@ def main():
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--frames", type=Path, default=None,
                         help="override frames CSV (default: config.FRAMES_FILE)")
-    parser.add_argument("--diagnose", action="store_true",
-                        help="run the failure-mode agent on rejected/review masks")
     parser.add_argument("--hpc", action="store_true",
                         help="use HPC data paths (totahv@base.hpc.taltech.ee)")
     parser.add_argument("--workers", type=int, default=None,
@@ -511,7 +489,7 @@ def main():
             futures = {
                 executor.submit(
                     process_frame, fid, vlm, ann_out_dir, results_out_dir,
-                    args.diagnose, swin_agent, discovery_agent, monitor,
+                    swin_agent, discovery_agent, monitor,
                 ): fid
                 for fid in frame_ids
             }

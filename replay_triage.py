@@ -83,7 +83,7 @@ def _triage_full(mask: dict, swin_q: float, **_) -> str:
     scores = mask.get("scores", {})
     swin = scores.get("swin_agreement")
     quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
-    return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
+    return triage(ag.get("bbox"), quality_out, ag.get("consistency")).decision
 
 
 def _triage_swin_only(mask: dict, swin_q: float, **_) -> str:
@@ -97,7 +97,7 @@ def _triage_swin_only(mask: dict, swin_q: float, **_) -> str:
 def _triage_vlm_only(mask: dict, **_) -> str:
     """BBox VLM + consistency only — Swin quality signal ignored."""
     ag = mask["agents"]
-    return triage(ag.get("bbox"), None, None, ag.get("correction"), ag.get("consistency")).decision
+    return triage(ag.get("bbox"), None, ag.get("consistency")).decision
 
 
 def _triage_with_bypass(mask: dict, swin_q: float, **_) -> str:
@@ -114,7 +114,7 @@ def _triage_with_bypass(mask: dict, swin_q: float, **_) -> str:
         bbox_out = ag.get("bbox")
         quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
 
-    return triage(bbox_out, quality_out, None, ag.get("correction"), ag.get("consistency")).decision
+    return triage(bbox_out, quality_out, ag.get("consistency")).decision
 
 
 def _triage_swin_protected(mask: dict, swin_q: float, **_) -> str:
@@ -125,7 +125,7 @@ def _triage_swin_protected(mask: dict, swin_q: float, **_) -> str:
     scores = mask.get("scores", {})
     swin = scores.get("swin_agreement")
     quality_out = "good" if (swin is not None and swin >= swin_q) else ag.get("quality")
-    return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
+    return triage(ag.get("bbox"), quality_out, ag.get("consistency")).decision
 
 
 def _triage_disjunctive_reject(mask: dict, swin_q: float, **_) -> str:
@@ -156,7 +156,7 @@ def _triage_uniform_tau(mask: dict, swin_q: float, **_) -> str:
         quality_out = "good" if swin >= swin_q else "bad"
     else:
         quality_out = ag.get("quality")
-    return triage(ag.get("bbox"), quality_out, None, ag.get("correction"), ag.get("consistency")).decision
+    return triage(ag.get("bbox"), quality_out, ag.get("consistency")).decision
 
 
 def _quality_out(mask: dict, swin_q: float) -> str | None:
@@ -179,7 +179,7 @@ def _consistency_class_aware(mask: dict) -> str | None:
 
 
 def _protected_triage(bbox: str | None, quality: str | None,
-                      correction: str | None, consistency: str | None) -> str:
+                      consistency: str | None) -> str:
     """Concordance triage with the background verdict protected by Swin.
 
     Identical to core.triage.triage except bbox=background counts as two
@@ -204,8 +204,6 @@ def _protected_triage(bbox: str | None, quality: str | None,
         return TRIAGE_REJECT
     if bbox == "valid" and quality == "good" and consistency == "pass":
         return "accept"
-    if bbox == "valid" and quality == "good" and consistency == "fail":
-        return "refine" if correction == "refine" else "human_review"
     return "human_review"
 
 
@@ -214,7 +212,7 @@ def _triage_background_protected(mask: dict, swin_q: float, **_) -> str:
     when Swin quality is good — downgraded to one negative, routed to review."""
     ag = mask["agents"]
     return _protected_triage(ag.get("bbox"), _quality_out(mask, swin_q),
-                             ag.get("correction"), ag.get("consistency"))
+                             ag.get("consistency"))
 
 
 def _triage_lidar_class_aware(mask: dict, swin_q: float, **_) -> str:
@@ -222,8 +220,8 @@ def _triage_lidar_class_aware(mask: dict, swin_q: float, **_) -> str:
     classes use τ=0.05 so thin structures no longer fail consistency and Swin
     simultaneously for the same physical reason (correlated failure)."""
     ag = mask["agents"]
-    return triage(ag.get("bbox"), _quality_out(mask, swin_q), None,
-                  ag.get("correction"), _consistency_class_aware(mask)).decision
+    return triage(ag.get("bbox"), _quality_out(mask, swin_q),
+                  _consistency_class_aware(mask)).decision
 
 
 def _triage_limits_fixed(mask: dict, swin_q: float, **_) -> str:
@@ -231,7 +229,7 @@ def _triage_limits_fixed(mask: dict, swin_q: float, **_) -> str:
     class-aware LiDAR thresholds."""
     ag = mask["agents"]
     return _protected_triage(ag.get("bbox"), _quality_out(mask, swin_q),
-                             ag.get("correction"), _consistency_class_aware(mask))
+                             _consistency_class_aware(mask))
 
 
 VARIANTS = {
