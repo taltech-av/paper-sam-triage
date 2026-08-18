@@ -1,20 +1,17 @@
 % The controlled human-cleaning experiment. Two configs under
 % config/vlm/clftv2-base/cleaning/ in the fusion-training repo, driven by
 % slurms/clftv2/run_vlm_campaign.sh cleaning. They differ in exactly one field,
-% annotation_path; splits, architecture and hyperparameters are byte-identical.
+% annotation_path; splits, architecture and hyperparameters are identical.
 % The lower block is the result to read — see the caption.
-\begin{table}[t]
+\begin{table}[tb]
 \centering
 \caption{Does human cleaning of the labels change what a model learns? Both arms train on the same
-         651 frames and are evaluated on the same held-out 201, differing by exactly one variable:
-         whether the masks a human called incorrect are erased. Cleaning only ever deletes --- the
-         human set is a strict subset of the raw one --- so no other difference can explain a gap.
-         It is separate from Table~\ref{tab:ablation} because it is the one comparison in which
-         training-set size can be held fixed. The intervention removes 5.3\,\% of object pixels and
-         is nonetheless significant ($P(\Delta\leq0)=0.003$, 10{,}000 paired weather-stratified
-         resamples). The $\Delta$ column is the mean paired bootstrap difference, which for a ratio
-         statistic need not equal the difference of the point estimates ($+2.8$ here). The lower
-         block reads each class's IoU change against the dose it received.}
+         651 frames and are scored on the same held-out 201, differing only in whether the masks a
+         human called incorrect are erased; cleaning only ever deletes, so nothing else can explain the
+         gap ($P(\Delta\leq0)=0.003$, 10{,}000 paired resamples drawn within each weather group). The
+         $\Delta$ column is the mean paired bootstrap difference, which for a ratio statistic need not
+         equal the difference of the point estimates ($+2.8$ here). The lower block reads each class's
+         IoU change against the share of that class deleted.}
 \label{tab:cleaning}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccc}

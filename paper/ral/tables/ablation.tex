@@ -1,42 +1,49 @@
-% Seven rows, one per scheduled training run. The configs are
-% config/vlm/clftv2-base/{shared,llava,qwen}/ in the fusion-training repo and the
-% runs are driven by slurms/clftv2/run_vlm_campaign.sh ladder.
+% One table for the whole ladder: seven scheduled runs, read two ways. Class and
+% mIoU columns and the paired CI come from the same checkpoints as the per-weather
+% columns (the per-weather test subsets of splits_vlm_4110_humantest).
+% Merged from tables/weather_miou.tex on 2026-08-18: both tables described the same
+% runs and were cited by the same subsection, so they competed for float slots.
+% fw-IoU was dropped in the merge; it was never cited in the text.
+%
 % Two rows that appeared in earlier drafts are deliberately gone:
 %   · "Human-verified" — the human labels cover 1,001 frames against these
 %     variants' 2,642, so the comparison confounded label quality with training
-%     -set size. It is now its own controlled experiment, Table~\ref{tab:cleaning}.
+%     -set size. It is now its own experiment, Table~\ref{tab:cleaning}.
 %   · "SAM (curated)" — a clean-partition baseline at a different annotation
 %     volume, which reintroduces exactly that confound and has no config.
 \begin{table*}[t]
 \centering
-\caption{Annotation variant ablation on CLFTv2-Base (RGB--LiDAR CrossFusion). The ladder is nested:
-         each step adds exactly one stage, so a change is attributable to that stage. All variants
-         train on the same 2{,}642 flagged frames carrying no human labels and are evaluated on the
-         same held-out 1{,}001 human-verified frames, so no human label is spent on training and no
-         variant is graded against its own labels. mIoU averages vehicle, sign, and human
-         (cyclist $+$ pedestrian) as the mean over the five weather mIoUs; fw-IoU weights by pixel
-         frequency. The last column is the \emph{paired} difference against Swin only, 95\,\% CI
-         from 10{,}000 weather-stratified resamples with identical indices for every variant.
-         \emph{Geometry-gated disc.}\ discards candidates abutting a same-class SAM mask before they
-         are painted, which needs no model call and no human label; it recovers $+5.6$ mIoU against
-         ungated discovery ($P(\Delta\leq0)<10^{-4}$) and is the only change to the discovery stage
-         that we find helps.}
+\caption{Annotation variant ablation on CLFTv2-Base (RGB--LiDAR CrossFusion). Each step adds exactly
+         one stage, and every indented row adds its stage to the Swin agreement threshold above it. All variants train on the same 2{,}642 flagged frames carrying no human labels and
+         are scored on the same held-out 1{,}001 human-verified frames. Differences against Swin only
+         are paired and quoted in the text with a 95\,\% CI from 10{,}000 resamples drawn within each
+         weather group, using identical indices for every variant. The right-hand block reads the same runs
+         per weather condition; those groups differ in size by more than a factor of twenty, so the
+         overall comparison belongs to the paired differences quoted in the text rather than to a mean
+         over these five columns.
+         The geometry-gated row is the free rim filter of
+         Section~\ref{exp:geometry} ($P(\Delta\leq0)<10^{-4}$ against ungated discovery).}
 \label{tab:ablation}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{llc ccccc l}
+\begin{tabular}{lc cccc ccccc}
 \toprule
-\textbf{Variant} & \textbf{Description} & \textbf{VLM} &
-  \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & \textbf{$\Delta$mIoU vs Swin only (95\% CI)} \\
+ & & \multicolumn{4}{c}{\textbf{Scored on all 1{,}001 test frames}} &
+     \multicolumn{5}{c}{\textbf{mIoU per weather condition}} \\
+\cmidrule(lr){3-6}\cmidrule(lr){7-11}
+\textbf{Variant} & \textbf{VLM} &
+  \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} &
+  \textbf{Day fair} & \textbf{Day rain} & \textbf{Night fair} & \textbf{Night rain} & \textbf{Snow} \\
+ & & & & & & \textit{(661)} & \textit{(122)} & \textit{(146)} & \textit{(43)} & \textit{(29)} \\
 \midrule
-Raw SAM & No triage; SAM pseudo-labels unchanged & \textemdash & 67.5 & 31.1 & 25.3 & 40.3 & 58.9 & $-3.9$ \ [$-5.3$, $-2.5$] \\
-\textbf{Swin only} & Swin agreement threshold; no VLM & \textemdash & \textbf{69.6} & \textbf{37.8} & \textbf{28.4} & \textbf{44.2} & \textbf{61.8} & \textemdash \ \textit{(reference)} \\
-Swin + disc.\ (no VLM) & Swin filtering + all Swin-detected discoveries & \textemdash & 60.6 & 25.3 & 21.7 & 34.8 & 52.4 & $-9.4$ \ [$-10.4$, $-8.4$] \\
-Swin + geometry-gated disc. & Discards candidates abutting a same-class mask & \textemdash & 68.2 & 31.6 & 25.8 & 40.4 & 59.5 & $-3.8$ \ [$-4.8$, $-2.9$] \\
+Raw SAM, no triage & \textemdash & 67.5 & 31.1 & 25.3 & 40.3 & 41.6 & 42.9 & 37.1 & 36.4 & 43.6 \\
+\textbf{Swin agreement threshold only} & \textemdash & \textbf{69.6} & \textbf{37.8} & \textbf{28.4} & \textbf{44.2} & \textbf{45.4} & \textbf{46.3} & \textbf{44.1} & \textbf{39.7} & \textbf{45.5} \\
+\quad $+$ all discovered regions & \textemdash & 60.6 & 25.3 & 21.7 & 34.8 & 36.1 & 36.3 & 34.0 & 29.4 & 38.1 \\
+\quad $+$ geometry-gated discovery & \textemdash & 68.2 & 31.6 & 25.8 & 40.4 & 42.2 & 42.0 & 39.9 & 35.0 & 43.0 \\
 \addlinespace
-Triage & Swin + VLM + consistency & LLaVA & 67.5 & 35.4 & 26.8 & 41.1 & 59.6 & $-3.0$ \ [$-4.5$, $-1.6$] \\
-Triage &  & Qwen & 68.5 & 33.3 & 28.0 & 41.5 & 60.1 & $-2.7$ \ [$-4.1$, $-1.5$] \\
-Triage + disc. & Full pipeline & LLaVA & 60.1 & 25.2 & 22.4 & 34.7 & 52.0 & $-9.4$ \ [$-10.7$, $-8.1$] \\
-Triage + disc. &  & Qwen & 60.5 & 23.7 & 24.4 & 35.5 & 52.2 & $-8.7$ \ [$-9.8$, $-7.7$] \\
+\quad $+$ VLM triage & LLaVA & 67.5 & 35.4 & 26.8 & 41.1 & 43.8 & 44.4 & 37.8 & 33.1 & 46.6 \\
+\quad $+$ VLM triage & Qwen & 68.5 & 33.3 & 28.0 & 41.5 & 43.7 & 44.0 & 39.8 & 34.4 & 45.3 \\
+\quad $+$ VLM triage $+$ discovery & LLaVA & 60.1 & 25.2 & 22.4 & 34.7 & 36.1 & 36.4 & 34.1 & 29.4 & 37.6 \\
+\quad $+$ VLM triage $+$ discovery & Qwen & 60.5 & 23.7 & 24.4 & 35.5 & 36.3 & 37.3 & 35.4 & 31.2 & 37.1 \\
 \bottomrule
 \end{tabular}}
 \end{table*}

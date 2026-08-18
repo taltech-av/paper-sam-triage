@@ -9,22 +9,16 @@
 % because SAM proposals carry ZOD's four classes and discovery candidates carry
 % Swin's three. Compared unfolded, every human-class candidate reads as abutting
 % nothing.
-\begin{table}[t]
+\begin{table}[tb]
 \centering
-\caption{What each discovery candidate was lying against, crossed with the human verdict on it. The
-         four outcomes are one factorial, not four categories: the columns ask whether the ring of
-         SAM pixels around a candidate contains a mask of its \emph{own class} --- which separates
-         editing the boundary of an object the pipeline already has from proposing one it does not
-         --- and the rows carry the verdict. Only the right column can hold an object SAM never
-         proposed, and only its lower cell is a genuine recovery. Cells give the candidate count and
-         then three shares: \% of the 13{,}695 answered candidates / \% of the 10.7\,M pixels they
-         painted / \% of candidates over the final 200 frames, the calibration in force at the end
-         of a non-stationary pass. Margins give the first two only. The pixel share is the one the
-         downstream loss responds to, and it is what makes the top row read as it does: 61.7\,\% of
-         everything discovery paints, a human rejected. Because candidates are SAM-subtracted before
-         connected components are formed, a rim never overlaps the mask it surrounds --- so a
-         rejected rim is paint applied \emph{beside} a correct object rather than a harmless
-         duplicate.}
+\caption{What each discovery candidate was lying against, crossed with the human verdict on it.
+         The columns ask whether the ring of SAM pixels around a candidate contains a mask of its
+         \emph{own class}, which separates editing the boundary of an object the pipeline already has
+         from proposing one it does not; the rows carry the verdict. Only the lower right cell is a
+         genuine recovery. Cells give the candidate count and then three shares: \% of the 13{,}695
+         answered candidates / \% of the 10.7\,M pixels they painted / \% of candidates over the last
+         200 frames labelled. Margins give the first two only. The lower block splits the added pixels
+         of each class over the same four outcomes.}
 \label{tab:discovery_geometry}
 \resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccc}

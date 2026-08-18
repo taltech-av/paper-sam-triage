@@ -1,0 +1,23 @@
+% Machine time from the two annotation runs over the flagged partition (4,110
+% frames); human time from the verification job's own clock, 20.9 h over 1,001
+% frames, extrapolated at the all-frames and recent-quarter paces (27.2 and
+% 33.5 s/frame) — the PROGRESS block of
+%   python analyze_human_verification.py --export human_verified_output/verify_export.csv
+\begin{table}[tb]
+\centering
+\caption{What it costs to check the flagged partition once, 4{,}110 frames. Machine time is one
+         A100--80GB; human time is the same labeller judging every proposal in a frame in one pass.
+         The last column is per-frame time against the human, who is the reference the backends are
+         scored against.}
+\label{tab:verification_cost}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Verifier} & \textbf{Whole partition} & \textbf{Median per frame} & \textbf{vs human} \\
+\midrule
+LLaVA-1.6-34B      & 132.3 GPU-h & 109\,s & $4\times$ \\
+Qwen2.5-VL-72B     & 426.9 GPU-h & 352\,s & $13\times$ \\
+\textbf{Human pass} & \textbf{31--42 h} & \textbf{27\,s} & \textemdash \ \textit{(reference)} \\
+\bottomrule
+\end{tabular}}
+\end{table}

@@ -1,0 +1,39 @@
+% Every row recomputed from the closed export by
+%   python sweep_triage_operating_points.py --export human_verified_output/verify_export.csv
+% The shipped setting reproduces the `triage` row of tables/human_agreement.tex
+% exactly, which is the check that the replay is faithful. The dense-agreement
+% rows differ from that table's `Swin only` row by about a point because the
+% shipped path also applies the degenerate-geometry pre-filter and the bypass.
+\begin{table}[tb]
+\centering
+\caption{Every setting of the rule we swept, on the same masks as Table~\ref{tab:human_agreement}.
+         Each row buys one error with the other, so moving a threshold slides the rule along one
+         trade-off; the dense agreement threshold alone reaches a corner no setting of the three-signal
+         rule reaches. All rows come from one script over the stored per-mask signals, so the shipped
+         row matches Table~\ref{tab:human_agreement} while the dense rows sit about a point from its
+         \emph{Swin only} row.}
+\label{tab:operating_points}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lrr}
+\toprule
+\textbf{Rule and setting} & \textbf{Bad masks kept \%} & \textbf{Good masks deleted \%} \\
+\midrule
+Keep every mask                          & 100.0 & 0.0 \\
+\addlinespace
+\multicolumn{3}{l}{\textit{Three signals, LiDAR threshold swept}} \\
+\addlinespace[1pt]
+$\tau = 0.05$                            & 55.8 & 13.5 \\
+\textbf{$\tau = 0.10$ (shipped)}         & \textbf{54.9} & \textbf{14.1} \\
+$\tau = 0.30$                            & 51.7 & 16.7 \\
+$\tau = 0.50$                            & 45.7 & 21.0 \\
+$\tau = 0.70$                            & 28.5 & 33.7 \\
+\addlinespace
+Any one negative signal deletes          & 11.6 & 47.5 \\
+\addlinespace
+\multicolumn{3}{l}{\textit{Dense agreement alone, no VLM and no LiDAR}} \\
+\addlinespace[1pt]
+$0.30 / 0.15$                            & 24.8 & 26.2 \\
+$0.60 / 0.30$                            & 18.8 & 31.3 \\
+\bottomrule
+\end{tabular}}
+\end{table}
