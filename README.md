@@ -36,7 +36,7 @@ What the audit found, each reproducible from the commands in
 |---|---|
 | Upstream — generates the SAM annotations audited here | [paper-aim2026-zod-sam-generator](https://github.com/taltech-av/paper-aim2026-zod-sam-generator) |
 | **This repository** — triage, discovery, human verification, analysis | — |
-| Downstream — trains CLFTv2 on each annotation variant | [paper-aim2026-fusion-trainer](https://github.com/taltech-av/paper-aim2026-fusion-trainer) |
+| Downstream — trains CLFTv2 on each annotation variant | [paper-sam-triage-training](https://github.com/taltech-av/paper-sam-triage-training) |
 
 ## Quick start
 

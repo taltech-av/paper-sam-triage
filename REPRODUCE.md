@@ -8,7 +8,7 @@ the pipeline stores every model response and the analysis replays them.
 |---|---|---|
 | 1. Offline replay | ~1 GB disk, no GPU | the verification-coverage, per-rule agreement, operating-point, per-class backend, cost, and review-targeting tables; every human-reference number in Sections V-A, V-B, V-E, V-F |
 | 2. Pipeline re-run | ZOD + GPU + Ollama + 2.8 GB of bundle | The stored responses themselves (`vlm/<tag>/results/`) |
-| 3. Downstream training | Tier 2 output + [fusion-training](https://github.com/taltech-av/paper-aim2026-fusion-trainer) | the downstream ladder and the cleaning contrast; the mIoU ladder in Sections V-C, V-D |
+| 3. Downstream training | Tier 2 output + [paper-sam-triage-training](https://github.com/taltech-av/paper-sam-triage-training) | the downstream ladder and the cleaning contrast; the mIoU ladder in Sections V-C, V-D |
 
 Start by unpacking the artifact bundle and pointing `.env` at it — see [DATA.md](DATA.md).
 
@@ -137,7 +137,7 @@ python make_label_bundle.py            # one zip, one job: proposals + candidate
 ## Tier 3 — downstream training
 
 The downstream ladder and the cleaning contrast are trained in the
-[fusion-training](https://github.com/taltech-av/paper-aim2026-fusion-trainer)
+[paper-sam-triage-training](https://github.com/taltech-av/paper-sam-triage-training)
 repo, not here. This repo produces their inputs and consumes their outputs.
 
 ```bash
@@ -146,7 +146,7 @@ python make_splits.py --frames "$VLM_DATA_ROOT"/vlm/human_verified/frames.csv \
     --out-dir "$VLM_DATA_ROOT"/vlm/human_verified/splits \
     --annotation-dir "$VLM_DATA_ROOT"/vlm/human_verified/annotation
 
-# 2. train each variant (fusion-training), then dump per-frame metrics
+# 2. train each variant (paper-sam-triage-training), then dump per-frame metrics
 #    → dump_frame_metrics.py, one JSON per variant on the SAME test frames
 
 # 3. paired, weather-stratified bootstrap CIs (here)

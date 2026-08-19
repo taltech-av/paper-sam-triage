@@ -164,10 +164,10 @@ DISCOVERY_MIN_PIXELS = 20
 DISCOVERY_MAX_CANDIDATES = 20
 
 # --- Swin quality agent ---
-# Checkout of the fusion-training repo that supplies the CLFTv2/Swin model; the
+# Checkout of the paper-sam-triage-training repo supplying the CLFTv2/Swin model; the
 # checkpoint is the one trained on the 2,319-frame clean partition. Both are
 # released with the artifact bundle — see DATA.md.
-FUSION_DIR = _env_path("VLM_FUSION_DIR", _REPO_ROOT.parent / "fusion-training")
+FUSION_DIR = _env_path("VLM_FUSION_DIR", _REPO_ROOT.parent / "paper-sam-triage-training")
 SWIN_CFG_PATH  = _env_path("VLM_SWIN_CFG", FUSION_DIR / "config/zod/swin/config_9.json")
 SWIN_CKPT_PATH = _env_path("VLM_SWIN_CKPT", FUSION_DIR / "logs/zod/swin/config_9/best.pth")
 SWIN_DEVICE = os.environ.get("VLM_SWIN_DEVICE", "cuda:0")
