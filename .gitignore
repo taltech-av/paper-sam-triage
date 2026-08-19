@@ -19,3 +19,4 @@ human_verified_output
 
 # local machine paths (see .env.example)
 .env
+paper
