@@ -104,10 +104,10 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--export", type=Path, required=True)
     parser.add_argument("--base", type=Path,
-                        default=Path("/mnt/ml/zod_temp/annotation_swin_only"),
+                        default=config.DATA_ROOT / "annotation_swin_only",
                         help="annotation the discovery variant was layered onto")
     parser.add_argument("--variant", type=Path,
-                        default=Path("/mnt/ml/zod_temp/annotation_swin_only_discovery_noVLM_ccm"),
+                        default=config.DATA_ROOT / "annotation_swin_only_discovery_noVLM_ccm",
                         help="the painted discovery variant, for the reconciliation check")
     parser.add_argument("--masks", type=Path,
                         default=config.DATA_ROOT / "vlm" / "discovery_masks")

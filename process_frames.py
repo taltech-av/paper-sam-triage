@@ -403,7 +403,7 @@ def main():
     parser.add_argument("--frames", type=Path, default=None,
                         help="override frames CSV (default: config.FRAMES_FILE)")
     parser.add_argument("--hpc", action="store_true",
-                        help="use HPC data paths (totahv@base.hpc.taltech.ee)")
+                        help="use the VLM_HPC_* data paths from .env")
     parser.add_argument("--workers", type=int, default=None,
                         help="parallel frame workers (default: config.WORKERS — 1 local, 4 HPC)")
     parser.add_argument("--no-swin", action="store_true",

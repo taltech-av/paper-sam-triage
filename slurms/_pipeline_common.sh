@@ -20,7 +20,7 @@
 EXIT_HEALTH_ABORT=42                      # must match vlm/health.py
 MAX_RESTARTS="${MAX_RESTARTS:-20}"        # ceiling on reload attempts per job
 OLLAMA_PORT="${OLLAMA_PORT:-11435}"
-RESULTS_DIR="${RESULTS_DIR:-/gpfs/mariana/smbhome/totahv/zod_temp/vlm/${TAG}/results}"
+RESULTS_DIR="${RESULTS_DIR:-${VLM_HPC_DATA_ROOT:?set VLM_HPC_DATA_ROOT in .env}/vlm/${TAG}/results}"
 
 completed_frames() {
     ls -1 "$RESULTS_DIR"/*.json 2>/dev/null | grep -cv 'summary' || true

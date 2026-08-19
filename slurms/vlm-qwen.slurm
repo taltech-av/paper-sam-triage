@@ -7,10 +7,11 @@
 #SBATCH --time=48:00:00
 #SBATCH --partition=gpu
 #SBATCH --account=project_ito_llm
-#SBATCH --output=/gpfs/mariana/smbhome/totahv/paper-vlm-annotation-pipeline/logs/pipeline_%j.log
-#SBATCH --error=/gpfs/mariana/smbhome/totahv/paper-vlm-annotation-pipeline/logs/pipeline_%j.log
+#SBATCH --output=logs/pipeline_%j.log
+#SBATCH --error=logs/pipeline_%j.log
 
-PIPELINE_DIR="/gpfs/mariana/smbhome/totahv/paper-vlm-annotation-pipeline"
+# Submit from the repo root, or export PIPELINE_DIR to point elsewhere.
+PIPELINE_DIR="${PIPELINE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 MODEL="qwen2.5vl:72b"
 # Fresh tag: the 2026-06 run under `qwen2.5vl_72b` is kept as-is — it is the
 # record of the serving fault, not a run to be topped up. Do not point this at
@@ -20,7 +21,7 @@ TAG="qwen2.5vl_72b_v2"
 export PATH="$HOME/bin:$PATH"
 export OLLAMA_HOST="0.0.0.0:11435"
 export OLLAMA_CONTEXT_LENGTH=4096
-export OLLAMA_MODELS="/gpfs/mariana/smbhome/totahv/ollama_models"
+export OLLAMA_MODELS="${OLLAMA_MODELS:-$HOME/ollama_models}"
 export OLLAMA_NUM_PARALLEL=2
 export LD_LIBRARY_PATH="$PIPELINE_DIR/cuda/lib64:$LD_LIBRARY_PATH"
 

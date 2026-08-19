@@ -3,7 +3,7 @@
 Render the four discovery-candidate outcomes as real crops, one per cell of the
 candidate-geometry join: edge bleed, boundary growth, false alarm, new object.
 
-This is the photographic counterpart to paper/ral/diagrams/candidate_geometry.tex
+This is the photographic counterpart to the candidate-geometry schematic
 and deliberately shares its palette -- grey for a SAM mask the pipeline already
 had, orange for a candidate the human rejected, teal for one they kept -- so the
 schematic and the photographs read as one argument.
@@ -38,7 +38,7 @@ from PIL import Image
 import config
 
 EXPORT = Path(__file__).parent / "human_verified_output" / "verify_export.csv"
-OUT_DIR = Path(__file__).parent / "paper" / "ral" / "figures"
+OUT_DIR = Path(__file__).parent / "figures"
 
 NEIGHBOUR_RADIUS = 9
 CLASS_FOLD = {"cyclist": "human", "pedestrian": "human"}
@@ -227,10 +227,13 @@ def main():
                         help="render the top picks per cell as browsable panels + "
                              "contact sheets instead of writing the paper figures")
     parser.add_argument("--sheet-dir", type=Path,
-                        default=Path(__file__).parent / "qualitative_candidates" / "ral_ready")
-    parser.add_argument("--exclude-icaart", action="store_true",
-                        help="skip frames already used in the ICAART figures, so the two "
-                             "papers keep disjoint photo sets")
+                        default=Path(__file__).parent / "qualitative_candidates" / "figure_ready")
+    parser.add_argument("--exclude-used", action="store_true",
+                        help="skip frames listed in --used-provenance, so two figure sets "
+                             "drawn from the same corpus stay disjoint")
+    parser.add_argument("--used-provenance", type=Path,
+                        default=Path(__file__).parent / "figures" / "qualitative_provenance.json",
+                        help="provenance file recording frames already spent on another set")
     args = parser.parse_args()
 
     forced = {}
@@ -240,12 +243,12 @@ def main():
         forced[cell] = (frame_id, int(index))
 
     excluded = set()
-    if args.exclude_icaart:
-        prov = Path(__file__).parent / "paper" / "icaart" / "figures" / "qualitative_provenance.json"
+    if args.exclude_used:
+        prov = args.used_provenance
         if prov.exists():
             excluded = {e["frame_id"] for e in json.loads(prov.read_text()).values()
                         if e.get("frame_id")}
-            print(f"skipping {len(excluded)} frames already used in the ICAART figures")
+            print(f"skipping {len(excluded)} frames already used in another figure set")
 
     rows = load_rows()
     class_of = {(frame_id_of(r), int(r["maskId"])): fold(r["class"])

@@ -9,11 +9,11 @@
 set -e
 
 CSV="${1:-frames/bad_frames.csv}"
-HPC="totahv@base.hpc.taltech.ee"
+HPC="${HPC_HOST:?set HPC_HOST, e.g. user@cluster.example.edu}"
 
 # ── Update ZOD destination paths to match your HPC storage ───────────────────
-ZOD_TEMP_DST="$HPC:/gpfs/mariana/smbhome/totahv/zod_temp"
-ZOD_4K_DST="$HPC:/gpfs/mariana/smbhome/totahv/zod-data/single_frames"
+ZOD_TEMP_DST="$HPC:${VLM_HPC_DATA_ROOT:?set VLM_HPC_DATA_ROOT in .env}"
+ZOD_4K_DST="$HPC:${VLM_HPC_ZOD_ROOT:?set VLM_HPC_ZOD_ROOT in .env}"
 # ──────────────────────────────────────────────────────────────────────────────
 
 ZOD_TEMP_SRC="/run/media/tom/ml/zod_temp"

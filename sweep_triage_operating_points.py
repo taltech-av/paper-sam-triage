@@ -81,6 +81,63 @@ def rates(rows, delete, **kwargs) -> tuple[float, float]:
     return 100 * kept_bad / bad, 100 * lost_good / good
 
 
+# ── Review targeting ─────────────────────────────────────────────────────────
+# A reviewer who cannot look at every mask wants the wrong ones early. Ranking by
+# the free dense-agreement score puts them there; ranking whole frames does not,
+# because almost every frame holds at least one wrong mask.
+
+
+def targeting(rows, run: str) -> None:
+    """Errors found in the first fifth of a queue, and the queue needed for half."""
+    from pathlib import Path as _P
+    from collections import defaultdict
+
+    bad = sum(1 for row in rows if row["verdict"] == "incorrect")
+
+    def curve(order):
+        found = half = 0
+        at_fifth = None
+        for i, hit in enumerate(order, 1):
+            found += hit
+            if not half and found >= bad / 2:
+                half = 100 * i / len(order)
+            if i == round(0.2 * len(order)):
+                at_fifth = 100 * found / bad
+        return at_fifth, half
+
+    def by(key):
+        return curve([row["verdict"] == "incorrect"
+                      for row in sorted(rows, key=key)])
+
+    agreement = lambda row: float(row["mask_swin_agreement"])
+    combined = lambda row: (float(row["mask_swin_agreement"])
+                            - 0.15 * (row["mask_consistency"] == "fail")
+                            - 0.20 * (row[f"mask_bbox_agent_{run}"] == "invalid"))
+    crop_only = lambda row: row[f"mask_bbox_agent_{run}"] != "invalid"
+
+    frames = defaultdict(list)
+    for row in rows:
+        frames[_P(row["frame"]).stem].append(row)
+    frame_order = sorted(frames.values(),
+                         key=lambda masks: min(float(m["mask_swin_agreement"]) for m in masks))
+    found = half = 0
+    at_fifth = None
+    for i, masks in enumerate(frame_order, 1):
+        found += sum(1 for m in masks if m["verdict"] == "incorrect")
+        if not half and found >= bad / 2:
+            half = 100 * i / len(frame_order)
+        if i == round(0.2 * len(frame_order)):
+            at_fifth = 100 * found / bad
+
+    print("\nreview targeting        found in first 20%   queue needed for half")
+    print(f"  random order          {20.0:14.1f}   {50.0:19.1f}")
+    for name, key in (("dense agreement", agreement), ("  + crop verdict", combined),
+                      ("crop verdict only", crop_only)):
+        a, h = by(key)
+        print(f"  {name:20}{a:14.1f}   {h:19.1f}")
+    print(f"  whole frames         {at_fifth:15.1f}   {half:19.1f}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--export", type=Path,
@@ -110,6 +167,8 @@ def main() -> None:
                      tau_lidar=TAU_LIDAR, tau_large=scale, tau_small=scale / 2,
                      run=args.run)
         print(f"  {scale:4.2f}/{scale / 2:4.2f}    {b:8.1f}   {g:12.1f}")
+
+    targeting(rows, args.run)
 
 
 if __name__ == "__main__":

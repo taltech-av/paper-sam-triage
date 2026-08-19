@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this code or the accompanying annotation artifacts, please cite the archived record below."
+title: "VLM Annotation Triage Pipeline: SAM pseudo-label triage, discovery, and human verification on the Zenseact Open Dataset"
+type: software
+authors:
+  - family-names: Tahves
+    given-names: Toomas
+    orcid: "https://orcid.org/0009-0008-0050-2146"
+    affiliation: "Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia"
+  - family-names: Bellone
+    given-names: Mauro
+    orcid: "https://orcid.org/0000-0003-3692-0688"
+    affiliation: "FinEst Centre for Smart Cities, Tallinn University of Technology, Estonia; Department of Computer Science and Engineering, Universitas Mercatorum, Rome, Italy"
+  - family-names: Sell
+    given-names: Raivo
+    orcid: "https://orcid.org/0000-0003-1409-0206"
+    affiliation: "Department of Mechanical and Industrial Engineering, Tallinn University of Technology, Estonia"
+license: MIT
+repository-code: "https://github.com/taltech-av/paper-vlm-annotation-pipeline"
+doi: 10.5281/zenodo.22010998
+year: 2026
+keywords:
+  - pseudo-labeling
+  - Segment Anything Model
+  - vision-language models
+  - camera-LiDAR fusion
+  - semantic segmentation
+  - autonomous driving
+  - dataset annotation
+# Manuscripts describing this work are under review. Once one is accepted, add it
+# here as a `preferred-citation:` block so citation managers prefer the paper over
+# the archived artifact.

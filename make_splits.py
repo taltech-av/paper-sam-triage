@@ -33,9 +33,9 @@ Usage:
         --out-dir /run/media/tom/ml/zod_temp/splits_flagged
 
     # Small set — balance the class pixel mass, not just presence
-    python make_splits.py --frames /mnt/ml/zod_temp/vlm/human_verified/frames.csv \\
-        --out-dir /mnt/ml/zod_temp/vlm/human_verified/splits \\
-        --annotation-dir /mnt/ml/zod_temp/vlm/human_verified/annotation \\
+    python make_splits.py --frames "$VLM_DATA_ROOT"/vlm/human_verified/frames.csv \\
+        --out-dir "$VLM_DATA_ROOT"/vlm/human_verified/splits \\
+        --annotation-dir "$VLM_DATA_ROOT"/vlm/human_verified/annotation \\
         --balance pixels --val-ratio 0.15 --test-ratio 0.20
 
     # Custom ratios / annotation dir / seed

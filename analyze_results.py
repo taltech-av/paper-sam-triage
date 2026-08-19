@@ -8,8 +8,7 @@ All sections are formatted for direct copy-paste into the paper draft.
 Sync from HPC then run (replace TAG with the model tag, e.g. qwen2.5vl_72b_v2).
 `--delete` matters: scp/rsync without it leaves pruned frames behind locally,
 which is how a cleaned run reappears dirty on this machine.
-    rsync -av --delete totahv@base.hpc.taltech.ee:/gpfs/mariana/smbhome/totahv/zod_temp/vlm/TAG/ \\
-        /mnt/ml/zod_temp/vlm/TAG/
+    rsync -av --delete $HPC_HOST:$VLM_HPC_DATA_ROOT/vlm/TAG/ "$VLM_DATA_ROOT"/vlm/TAG/
     python analyze_results.py --tag TAG
 
 The report opens with RUN INTEGRITY, which must be read before any other

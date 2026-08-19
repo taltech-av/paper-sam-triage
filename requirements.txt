@@ -1,9 +1,21 @@
+# Runtime dependencies of this repository.
+#
+# The offline reproduction path (REPRODUCE.md) needs only the first block: it
+# reads stored JSON and PNGs and makes no model calls. torch is required only to
+# re-run the pipeline or regenerate discovery masks, both of which invoke the
+# CLFTv2/Swin quality model from the fusion-training repo.
+#
+# Exact versions used for the published runs are in requirements-lock.txt.
+
 numpy>=1.24
 Pillow>=10.0
 opencv-python-headless>=4.8
 tqdm>=4.66
 requests>=2.31
-# Swin quality agent (install with --index-url https://download.pytorch.org/whl/cu130)
-torch>=2.12.0
-torchvision>=0.22.0
+
+# --- Swin quality agent only (install with the CUDA index-url for your driver,
+# e.g. --index-url https://download.pytorch.org/whl/cu124) ---
+torch>=2.2
+torchvision>=0.17
+# imported by the fusion-training encoder, not by this repo directly
 timm>=1.0

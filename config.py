@@ -1,18 +1,48 @@
 import os
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).parent
+
+
+def _load_dotenv(path: Path) -> None:
+    """Read KEY=VALUE lines from `.env` into the environment, without overriding
+    anything already exported. Keeps machine-specific paths out of the source
+    tree: see .env.example for the full list of variables."""
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"\''))
+
+
+_load_dotenv(_REPO_ROOT / ".env")
+
+
+def _env_path(name: str, default):
+    """Path from the environment, or `default` when the variable is unset."""
+    value = os.environ.get(name)
+    if value:
+        return Path(value).expanduser()
+    return Path(default).expanduser() if isinstance(default, str) else default
+
+
 # --- Data paths ---
-# HPC: DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
-DATA_ROOT = Path("/mnt/ml/zod_temp")
+# Every path below is machine-specific and is therefore read from the environment.
+# Copy .env.example to .env and set them once; nothing else in the codebase
+# hardcodes a location. The defaults are repo-relative so a fresh clone runs
+# without editing source, and so no author's home directory ships in the repo.
+DATA_ROOT = _env_path("VLM_DATA_ROOT", _REPO_ROOT / "data")
 CAMERA_DIR = DATA_ROOT / "camera"
 LIDAR_DIR = DATA_ROOT / "lidar_png"
 ANNOTATION_SAM_DIR = DATA_ROOT / "annotation_sam"
-FRAMES_FILE = Path(__file__).parent / "frames" / "bad_frames.csv"
+FRAMES_FILE = _env_path("VLM_FRAMES_FILE", _REPO_ROOT / "frames" / "bad_frames.csv")
 
-# Original 4K ZOD images — used instead of 768px camera/ when available
-# Set to None to always use the downscaled camera/ images
-# HPC: ZOD_DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod-data/single_frames")
-ZOD_DATA_ROOT = Path("/mnt/ml/zod-data/single_frames")
+# Original 4K ZOD images — used instead of 768px camera/ when available.
+# Unset VLM_ZOD_ROOT (the default) to always use the downscaled camera/ images.
+ZOD_DATA_ROOT = _env_path("VLM_ZOD_ROOT", None)
 
 # All pipeline outputs live under one folder
 OUTPUT_ROOT = DATA_ROOT / "vlm"
@@ -59,15 +89,16 @@ def use_hpc():
     # machine. DISCOVERY_MAX_CANDIDATES used to be set here and silently made
     # local runs unable to reproduce the published candidate set.
     WORKERS = 4                     # matches the wall-clock figure reported in the paper
-    DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod_temp")
-    FUSION_DIR = Path("/gpfs/mariana/smbhome/totahv/fusion-training")
-    _swin_model_dir = Path("/gpfs/mariana/smbhome/totahv/models/swin")
-    SWIN_CFG_PATH  = _swin_model_dir / "config_9.json"
-    SWIN_CKPT_PATH = _swin_model_dir / "best.pth"
+    DATA_ROOT = _env_path("VLM_HPC_DATA_ROOT", DATA_ROOT)
+    FUSION_DIR = _env_path("VLM_HPC_FUSION_DIR", FUSION_DIR)
+    _swin_model_dir = _env_path("VLM_HPC_SWIN_DIR", None)
+    if _swin_model_dir is not None:
+        SWIN_CFG_PATH  = _swin_model_dir / "config_9.json"
+        SWIN_CKPT_PATH = _swin_model_dir / "best.pth"
     CAMERA_DIR = DATA_ROOT / "camera"
     LIDAR_DIR = DATA_ROOT / "lidar_png"
     ANNOTATION_SAM_DIR = DATA_ROOT / "annotation_sam"
-    ZOD_DATA_ROOT = Path("/gpfs/mariana/smbhome/totahv/zod-data/single_frames")
+    ZOD_DATA_ROOT = _env_path("VLM_HPC_ZOD_ROOT", ZOD_DATA_ROOT)
     _set_output_dirs(DATA_ROOT / "vlm")
 
 # --- Class definitions ---
@@ -133,10 +164,13 @@ DISCOVERY_MIN_PIXELS = 20
 DISCOVERY_MAX_CANDIDATES = 20
 
 # --- Swin quality agent ---
-FUSION_DIR = Path("/mnt/ml/projects/fusion-training")
-SWIN_CFG_PATH  = FUSION_DIR / "config/zod/swin/config_9.json"
-SWIN_CKPT_PATH = FUSION_DIR / "logs/zod/swin/config_9/best.pth"
-SWIN_DEVICE = "cuda:0"
+# Checkout of the fusion-training repo that supplies the CLFTv2/Swin model; the
+# checkpoint is the one trained on the 2,319-frame clean partition. Both are
+# released with the artifact bundle — see DATA.md.
+FUSION_DIR = _env_path("VLM_FUSION_DIR", _REPO_ROOT.parent / "fusion-training")
+SWIN_CFG_PATH  = _env_path("VLM_SWIN_CFG", FUSION_DIR / "config/zod/swin/config_9.json")
+SWIN_CKPT_PATH = _env_path("VLM_SWIN_CKPT", FUSION_DIR / "logs/zod/swin/config_9/best.pth")
+SWIN_DEVICE = os.environ.get("VLM_SWIN_DEVICE", "cuda:0")
 
 # Default thresholds (used when no per-class override exists)
 SWIN_AGREEMENT_THRESHOLD  = 0.30  # α ≥ threshold → quality "good"

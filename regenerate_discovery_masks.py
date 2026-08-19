@@ -25,6 +25,7 @@ Usage:
 
 import argparse
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -80,13 +81,17 @@ def main() -> None:
                              "(candidate sets are identical across tags)")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--hpc", action="store_true", help="Use HPC data paths")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="write masks here instead of <DATA_ROOT>/vlm/discovery_masks. "
+                             "Use this to verify a regeneration against the published set "
+                             "without overwriting it.")
     args = parser.parse_args()
 
     if args.hpc:
         config.use_hpc()
 
     results_dir = config.DATA_ROOT / "vlm" / args.tag / "results"
-    out_dir = config.DATA_ROOT / "vlm" / "discovery_masks"
+    out_dir = args.out or (config.DATA_ROOT / "vlm" / "discovery_masks")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     result_files = sorted(results_dir.glob("frame_*.json"))

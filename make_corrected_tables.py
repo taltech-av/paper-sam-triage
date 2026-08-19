@@ -12,7 +12,7 @@ JSON is missing are skipped with a warning, so the tables stay consistent.
 Usage:
     python make_corrected_tables.py \\
         --metrics-dir /run/media/tom/ml/projects/fusion-training/logs/vlm/frame_metrics/common_ref \\
-        --out-dir paper/tables
+        --out-dir tables
 """
 
 import argparse
@@ -284,7 +284,8 @@ def write_modality(variants, out: Path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--metrics-dir", type=Path, required=True)
-    parser.add_argument("--out-dir", type=Path, default=Path("paper/tables"))
+    parser.add_argument("--out-dir", type=Path, default=Path("tables"),
+                        help="where the .tex tables are written; created if absent")
     parser.add_argument("--n-boot", type=int, default=10000)
     args = parser.parse_args()
 
@@ -313,6 +314,7 @@ def main():
     # resample — bootstrap() indexes the first variant's conditions.
     boots = bootstrap(list(variants.values()), args.n_boot, seed=0) if variants else {}
 
+    args.out_dir.mkdir(parents=True, exist_ok=True)
     write_ablation(variants, boots, args.out_dir / "ablation.tex")
     write_weather(variants, args.out_dir / "weather_miou.tex")
     write_modality(variants, args.out_dir / "modality_ablation.tex")

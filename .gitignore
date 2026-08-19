@@ -16,3 +16,6 @@ commands.txt
 *-eps-converted-to.pdf
 qualitative_candidates/
 human_verified_output
+
+# local machine paths (see .env.example)
+.env

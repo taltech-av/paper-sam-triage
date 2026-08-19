@@ -575,7 +575,7 @@ def main() -> int:
     ap.add_argument("--out-dir", type=Path,
                     default=Path(__file__).parent / "qualitative_candidates" / "paper_ready")
     ap.add_argument("--figures-dir", type=Path,
-                    default=Path(__file__).parent / "paper" / "icaart" / "figures")
+                    default=Path(__file__).parent / "figures")
     ap.add_argument("--exclude", action="append", default=[],
                     help="frame_id to skip; repeatable (e.g. frames already in the paper)")
     ap.add_argument("--no-auto-exclude", action="store_true",
