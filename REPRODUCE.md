@@ -172,12 +172,21 @@ hyperparameters are identical.
 
 | Figure | Command |
 |---|---|
-| Pipeline overview | `paper/ral/diagrams/architecture_overview.tex` (TikZ, no script) |
+| Pipeline overview | hand-written TikZ in the manuscript tree, no script |
 | Discovery candidate cases (edge bleed / growth / false alarm / new object) | `python make_candidate_geometry_figure.py` |
 | Qualitative triage examples | `python select_qualitative_frames.py` → browse the contact sheets → `python make_qualitative_figures.py` |
+| Qualitative figure options (ladder, free signal, VLM cost, backend flips, review queue, geometry gate, pixel inflation, cleaning) | `python make_qualitative_figure_options.py` → browse `qualitative_candidates/options/preview.pdf` → `--promote <option> --as <stem>` |
 
 `select_qualitative_frames.py` narrows the corpus to contact sheets; it does not
 pick the final panels. The published figures were chosen by hand from its output.
+
+`make_qualitative_figure_options.py` renders every candidate figure as separate
+panels, two composite layouts, a contact sheet per family, and a `preview.pdf`
+that typesets all of them two-column, so the choice is made at print size. It
+writes nothing outside `qualitative_candidates/` until `--promote <option> --as
+<stem> --figures-dir <dir>` copies a pick, and it excludes by default the frames
+already spent on another figure set plus any frame an earlier family in the same
+run consumed.
 
 ---
 
