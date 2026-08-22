@@ -125,7 +125,7 @@ def write_ablation(variants, boots, out: Path):
         r"\begin{tabular}{llc ccccc l}",
         r"\toprule",
         r"\textbf{Variant} & \textbf{Description} & \textbf{VLM} &",
-        r"  \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} & "
+        r"  \textbf{Veh.} & \textbf{Sign} & \textbf{Road user} & \textbf{mIoU} & \textbf{fw-IoU} & "
         r"\textbf{$\Delta$mIoU vs " + REFERENCE_LABEL + r" (95\% CI)} \\",
         r"\midrule",
     ]
@@ -259,7 +259,7 @@ def write_modality(variants, out: Path):
         r"\resizebox{\columnwidth}{!}{%",
         r"\begin{tabular}{llccccc}",
         r"\toprule",
-        r"\textbf{Modality} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Human} & \textbf{mIoU} & \textbf{fw-IoU} \\",
+        r"\textbf{Modality} & \textbf{VLM} & \textbf{Veh.} & \textbf{Sign} & \textbf{Road user} & \textbf{mIoU} & \textbf{fw-IoU} \\",
         r"\midrule",
     ]
     first = True

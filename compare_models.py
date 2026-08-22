@@ -216,6 +216,24 @@ def mask_stats(records: dict[str, dict], frames: list[str]) -> dict:
                 degen=dict(degen), has_telemetry=telemetry)
 
 
+def _disc_bucket(d: dict) -> str:
+    """One discovery reply -> one of the four outcomes, re-parsed from the raw text.
+
+    Shared by disc_stats() and transitions() so a marginal rate and a joint
+    count can never be computed under two different parsers.
+    """
+    swin_cls = d.get("swin_class")
+    raw = d.get("vlm_response")
+    norm = (raw or "").strip().lower().rstrip(".")
+    if looks_degenerate(raw):
+        return "no-response"
+    if norm in _VALID_RESPONSES[swin_cls]:
+        return "confirmed"
+    if norm == "other":
+        return "other"
+    return "unanswered"
+
+
 def disc_stats(records: dict[str, dict], frames: list[str]) -> dict:
     """
     Discovery outcomes re-derived from the stored raw response.
@@ -245,16 +263,7 @@ def disc_stats(records: dict[str, dict], frames: list[str]) -> dict:
             label = DISC_CLASSES.get(swin_cls)
             if label is None:
                 continue
-            raw = d.get("vlm_response")
-            norm = (raw or "").strip().lower().rstrip(".")
-            if looks_degenerate(raw):
-                bucket = "no-response"
-            elif norm in _VALID_RESPONSES[swin_cls]:
-                bucket = "confirmed"
-            elif norm == "other":
-                bucket = "other"
-            else:
-                bucket = "unanswered"
+            bucket = _disc_bucket(d)
             out[label][bucket] += 1
             totals[bucket] += 1
             if bucket == "confirmed" and swin_cls == 3:
@@ -350,6 +359,143 @@ def label_divergence(runs: dict[str, dict], frames: list[str]) -> dict:
     return dict(n=n, moved=moved, flipped=flipped, pixels=pixels)
 
 
+def cascade(runs: dict[str, dict], frames: list[str]) -> dict:
+    """How far a raw verdict disagreement travels before it reaches a pixel.
+
+    Three nested levels on the same items. The nesting is not assumed: with
+    every non-VLM signal shared and one deterministic rule, two identical
+    verdicts must produce identical outcomes, so a flip without a verdict
+    disagreement would mean the comparison is not paired. `flip_same_verdict`
+    is that check and must be zero.
+
+    Reported conditionally rather than as a ratio of rates, because the three
+    levels do not share a denominator: a mask the geometry pre-filter rejected
+    never reached the BBox agent and has no verdict to disagree about.
+    """
+    names = list(runs)
+    a, b = runs[names[0]], runs[names[1]]
+    n = judged = 0
+    verdict_diff = state_diff = flip = 0
+    flip_same_verdict = 0
+    state_diff_no_pixels = 0      # accept <-> retained: both write the mask
+    px_total = px_flipped = 0
+
+    for fid in frames:
+        mb = {m["mask_id"]: m for m in b[fid]["masks"]}
+        for m in a[fid]["masks"]:
+            other = mb.get(m["mask_id"])
+            if other is None:
+                continue
+            n += 1
+            px = m.get("pixel_count") or 0
+            px_total += px
+
+            va, vb = m["agents"].get("bbox"), other["agents"].get("bbox")
+            has_verdict = va is not None and vb is not None
+            judged += has_verdict
+            vdiff = has_verdict and va != vb
+            verdict_diff += vdiff
+
+            da, db = recomputed_triage(m), recomputed_triage(other)
+            da = "retained" if da in ("refine", "human_review") else da
+            db = "retained" if db in ("refine", "human_review") else db
+            sdiff = da != db
+            state_diff += sdiff
+            flipped = (da == "reject") != (db == "reject")
+            flip += flipped
+            if flipped:
+                px_flipped += px
+                if not vdiff:
+                    flip_same_verdict += 1
+            elif sdiff:
+                state_diff_no_pixels += 1
+
+    return dict(n=n, judged=judged, verdict_diff=verdict_diff,
+                state_diff=state_diff, flip=flip,
+                flip_same_verdict=flip_same_verdict,
+                state_diff_no_pixels=state_diff_no_pixels,
+                px_total=px_total, px_flipped=px_flipped)
+
+
+def transitions(runs: dict[str, dict], frames: list[str]) -> dict:
+    """Paired transitions per class, at the verdict level and at the label level.
+
+    A marginal rejection rate cannot distinguish two backends that reject the
+    same 20% of a class from two that reject disjoint 20% halves of it. These
+    are the joint counts: for every mask, what A decided crossed with what B
+    decided, kept apart by class, and for the final outcome weighted by the
+    pixels each flip actually moves.
+
+    Three levels, all on the same paired masks:
+
+      bbox    the raw verdict crossed 3x3 (valid / invalid / background).
+      final   the recomputed triage outcome pooled to keep vs delete, since
+              only `reject` erases pixels. Four cells, of which the two
+              directional ones are the whole point.
+      disc    discovery confirmation crossed 2x2 per prompt class, on the
+              answered-by-both basis (the only unbiased one, see disc_stats)
+              and on the policy-inclusive basis the pipeline acted on.
+
+    Discovery candidates carry no id, so they are paired by position within a
+    frame; `bbox_384` is compared on every pair and mismatches are counted, so
+    a silent misalignment cannot pass as a disagreement.
+    """
+    names = list(runs)
+    a, b = runs[names[0]], runs[names[1]]
+
+    bbox = {c: defaultdict(int) for c in CLASSES}
+    final = {c: defaultdict(lambda: [0, 0]) for c in CLASSES}
+    disc = {c: defaultdict(int) for c in DISC_CLASSES.values()}
+    disc_policy = {c: defaultdict(int) for c in DISC_CLASSES.values()}
+    cand_misaligned = 0
+
+    for fid in frames:
+        mb = {m["mask_id"]: m for m in b[fid]["masks"]}
+        for m in a[fid]["masks"]:
+            other = mb.get(m["mask_id"])
+            if other is None:
+                continue
+            cls = m["class_name"]
+            if cls not in bbox:
+                continue
+
+            va, vb = m["agents"].get("bbox"), other["agents"].get("bbox")
+            if va is not None and vb is not None:
+                bbox[cls][(va, vb)] += 1
+
+            # Keep/delete is the only distinction the annotation file records:
+            # accept and retained_flagged both write the mask unchanged.
+            ka = recomputed_triage(m) != "reject"
+            kb = recomputed_triage(other) != "reject"
+            cell = ("both_keep" if ka and kb else
+                    "both_delete" if not ka and not kb else
+                    "a_keep_b_delete" if ka else "b_keep_a_delete")
+            px = m.get("pixel_count") or 0
+            final[cls][cell][0] += 1
+            final[cls][cell][1] += px
+
+        da, db = a[fid].get("discovered", []), b[fid].get("discovered", [])
+        for ca, cb in zip(da, db):
+            if ca.get("bbox_384") != cb.get("bbox_384"):
+                cand_misaligned += 1
+                continue
+            label = DISC_CLASSES.get(ca.get("swin_class"))
+            if label is None:
+                continue
+            ba, bb = _disc_bucket(ca), _disc_bucket(cb)
+            # Policy-inclusive: the pipeline confirms only on `confirmed`, so an
+            # unreadable reply silently discards the candidate.
+            disc_policy[label][(ba == "confirmed", bb == "confirmed")] += 1
+            if ba in ("confirmed", "other") and bb in ("confirmed", "other"):
+                disc[label][(ba == "confirmed", bb == "confirmed")] += 1
+
+    return dict(bbox={c: dict(v) for c, v in bbox.items()},
+                final={c: {k: list(v) for k, v in d.items()} for c, d in final.items()},
+                disc={c: dict(v) for c, v in disc.items()},
+                disc_policy={c: dict(v) for c, v in disc_policy.items()},
+                cand_misaligned=cand_misaligned)
+
+
 def timing(records: dict[str, dict], frames: list[str]) -> dict:
     """Per-mask BBox latency and per-frame wall time from stored timings."""
     bbox_calls, frame_total, frame_triage, frame_disc = [], [], [], []
@@ -402,7 +548,7 @@ def tex_num(v):
     return f"{v:,}".replace(",", "{,}")
 
 
-def print_report(names, stats, dstats, refs, agree, diverge, times, ident, args):
+def print_report(names, stats, dstats, refs, agree, diverge, times, ident, args, trans, casc):
     a, b = names
     W = 22
 
@@ -600,6 +746,72 @@ def print_report(names, stats, dstats, refs, agree, diverge, times, ident, args)
     print(f"\n  Cross-model BBox agreement  {agree['agree']:.1%} on {agree['n']} masks"
           f"   (answered only: {agree['agree_answered']:.1%} on {agree['n_answered']})")
 
+    # ── Cascade ───────────────────────────────────────────────────────────────
+    c = casc
+    print(f"\n  CASCADE  (how far a verdict disagreement travels)")
+    print(SEP)
+    print(f"  {'paired masks':44s} {c['n']:>10,}")
+    print(f"  {'  ...with a BBox verdict from both runs':44s} {c['judged']:>10,}")
+    print(f"  {'differing BBox verdict':44s} {c['verdict_diff']:>10,}"
+          f"  {100*c['verdict_diff']/c['judged']:5.1f}% of judged")
+    print(f"  {'  ...of which the triage state differs':44s} {c['state_diff']:>10,}"
+          f"  {100*c['state_diff']/c['verdict_diff']:5.1f}% of those")
+    print(f"  {'  ...of which the keep/delete outcome flips':44s} {c['flip']:>10,}"
+          f"  {100*c['flip']/c['verdict_diff']:5.1f}% of those")
+    print(f"  {'state differs but no pixel changes':44s} {c['state_diff_no_pixels']:>10,}"
+          f"  {100*c['state_diff_no_pixels']/c['state_diff']:5.1f}% of state diffs")
+    print(f"  {'flips without a verdict disagreement':44s} {c['flip_same_verdict']:>10,}"
+          f"   (must be 0)")
+    print(f"  {'object pixels, all masks':44s} {c['px_total']/1e6:>9.1f}M")
+    print(f"  {'object pixels at stake':44s} {c['px_flipped']/1e6:>9.1f}M"
+          f"  {100*c['px_flipped']/c['px_total']:5.1f}% of object pixels")
+
+    # ── Paired transitions ────────────────────────────────────────────────────
+    tr = trans
+    print(f"\n  FINAL OUTCOME TRANSITIONS  (keep vs delete, per class)")
+    print(SEP)
+    print(f"  {'cell':34s} " + " ".join(f"{c[:9]:>10}" for c in CLASSES) + f" {'total':>10}")
+    cells = [("both keep", "both_keep"), ("both delete", "both_delete"),
+             (f"{a[:14]} keeps, {b[:8]} deletes", "a_keep_b_delete"),
+             (f"{b[:14]} keeps, {a[:8]} deletes", "b_keep_a_delete")]
+    for label, key in cells:
+        row = [tr["final"][c].get(key, [0, 0])[0] for c in CLASSES]
+        print(f"  {label:34s} " + " ".join(f"{v:>10,}" for v in row) + f" {sum(row):>10,}")
+    print(f"  {'':34s} " + " ".join(f"{'':>10}" for _ in CLASSES) + f" {'':>10}")
+    for label, key in cells[2:]:
+        row = [tr["final"][c].get(key, [0, 0])[1] for c in CLASSES]
+        print(f"  {label + ' (px)':34s} " + " ".join(f"{v/1e3:>9.0f}k" for v in row)
+              + f" {sum(row)/1e6:>9.2f}M")
+
+    print(f"\n  BBOX VERDICT TRANSITIONS  (per class, as-recorded)")
+    print(SEP)
+    print(f"  {'cell':34s} " + " ".join(f"{c[:9]:>10}" for c in CLASSES) + f" {'total':>10}")
+    def bcell(c, pred):
+        return sum(n for (va, vb), n in tr["bbox"][c].items() if pred(va, vb))
+    for label, pred in (
+            ("same verdict", lambda x, y: x == y),
+            ("A valid, B not", lambda x, y: x == "valid" != y),
+            ("B valid, A not", lambda x, y: y == "valid" != x),
+            ("both non-valid, differing", lambda x, y: x != y and "valid" not in (x, y))):
+        row = [bcell(c, pred) for c in CLASSES]
+        print(f"  {label:34s} " + " ".join(f"{v:>10,}" for v in row) + f" {sum(row):>10,}")
+
+    print(f"\n  DISCOVERY CONFIRMATION TRANSITIONS  (answered by both)")
+    print(SEP)
+    dcls = list(DISC_CLASSES.values())
+    print(f"  {'cell':34s} " + " ".join(f"{c[:9]:>10}" for c in dcls) + f" {'total':>10}")
+    for label, key in (("both confirm", (True, True)),
+                       (f"{a[:14]} only", (True, False)),
+                       (f"{b[:14]} only", (False, True)),
+                       ("neither", (False, False))):
+        row = [tr["disc"][c].get(key, 0) for c in dcls]
+        print(f"  {label:34s} " + " ".join(f"{v:>10,}" for v in row) + f" {sum(row):>10,}")
+    row = [sum(tr["disc_policy"][c].values()) - sum(tr["disc"][c].values()) for c in dcls]
+    print(f"  {'(unanswered by one side)':34s} " + " ".join(f"{v:>10,}" for v in row)
+          + f" {sum(row):>10,}")
+    if tr["cand_misaligned"]:
+        print(f"  !! {tr['cand_misaligned']} candidate pairs had differing bbox_384")
+
     # ── Timing ────────────────────────────────────────────────────────────────
     print(f"\n  COST  (on the common frames only)")
     print(SEP)
@@ -763,7 +975,8 @@ def write_latex_performance(path: Path, names, stats, refs, agree, ident) -> Non
              "For Qwen the \\emph{answered only} row excludes masks whose verdict is a "
              "\\textsc{safe\\_default} substitution; the equivalent row cannot be computed "
              "for LLaVA, whose run predates the parse telemetry. "
-             f"Cross-VLM BBox agreement: {100*agree['agree']:.1f}\\% of masks receive the "
+             f"Cross-VLM BBox agreement: {100*agree['agree']:.1f}\\% of the "
+             f"{tex_num(agree['n'])} masks both runs sent to the BBox agent receive the "
              "same verdict from both models.}")
     L.append("\\label{tab:agent_performance}")
     L.append("\\resizebox{\\columnwidth}{!}{%")
@@ -780,6 +993,118 @@ def write_latex_performance(path: Path, names, stats, refs, agree, ident) -> Non
     L.append(row("BBox VLM (Qwen2.5-VL-72B)", refs[b]["all"]))
     if stats[b]["has_telemetry"]:
         L.append(row("\\quad Qwen, answered only", refs[b]["answered"]))
+    L.append("\\bottomrule")
+    L.append("\\end{tabular}}")
+    L.append("\\end{table}")
+    path.write_text("\n".join(L) + "\n")
+    print(f"  wrote {path}")
+
+
+def write_latex_transitions(path: Path, names, trans, ident) -> None:
+    """Emit tables/transitions.tex — the joint counts behind the marginal rates.
+
+    Two blocks over the same paired masks: what the BBox agent said crossed
+    between backends, and what survived triage crossed between backends, the
+    latter also in pixels. The two directional rows are the reason the table
+    exists: pooled they nearly cancel, per class they do not.
+    """
+    a, b = names
+    A, B = "LLaVA", "Qwen"
+    F, X = trans["final"], trans["bbox"]
+
+    def bcell(c, pred):
+        return sum(n for (va, vb), n in X[c].items() if pred(va, vb))
+
+    def row(label, values, fmt=tex_num):
+        cells = " & ".join(fmt(v) for v in values)
+        return f"{label} & {cells} & {fmt(sum(values))} \\\\"
+
+    L = ["% Generated by compare_models.py --latex-dir — do not edit by hand."]
+    L.append("\\begin{table}[t]")
+    L.append("\\centering")
+    L.append(f"\\caption{{Paired transitions on the {tex_num(ident['masks'])} identical "
+             "SAM masks, per class. Verdict rows use the "
+             f"{tex_num(sum(sum(X[c].values()) for c in CLASSES))} masks both runs sent to "
+             "the BBox agent; outcome rows pool accept and retained into \\emph{keep}, since "
+             "only rejection erases pixels. The two directional rows carry almost the same "
+             "pixel mass in opposite directions while pointing at different classes, which "
+             "is what a marginal rejection rate cannot show.}")
+    L.append("\\label{tab:transitions}")
+    L.append("\\resizebox{\\columnwidth}{!}{%")
+    L.append("\\begin{tabular}{lrrrrr}")
+    L.append("\\toprule")
+    L.append("\\textbf{Transition} & \\textbf{Vehicle} & \\textbf{Sign} & "
+             "\\textbf{Cyclist} & \\textbf{Ped.} & \\textbf{Total} \\\\")
+    L.append("\\midrule")
+
+    L.append("\\multicolumn{6}{l}{\\textit{BBox verdict}} \\\\")
+    L.append(row("Same verdict", [bcell(c, lambda x, y: x == y) for c in CLASSES]))
+    L.append(row(f"{A} valid, {B} not",
+                 [bcell(c, lambda x, y: x == "valid" != y) for c in CLASSES]))
+    L.append(row(f"{B} valid, {A} not",
+                 [bcell(c, lambda x, y: y == "valid" != x) for c in CLASSES]))
+    L.append(row("Differing, neither valid",
+                 [bcell(c, lambda x, y: x != y and "valid" not in (x, y)) for c in CLASSES]))
+
+    L.append("\\addlinespace")
+    L.append("\\multicolumn{6}{l}{\\textit{Final outcome, masks}} \\\\")
+    for label, key in (("Both keep", "both_keep"), ("Both delete", "both_delete"),
+                       (f"\\textbf{{{A} keeps, {B} deletes}}", "a_keep_b_delete"),
+                       (f"\\textbf{{{B} keeps, {A} deletes}}", "b_keep_a_delete")):
+        L.append(row(label, [F[c].get(key, [0, 0])[0] for c in CLASSES]))
+
+    L.append("\\addlinespace")
+    L.append("\\multicolumn{6}{l}{\\textit{Final outcome, object pixels deleted by one side}} \\\\")
+    px = lambda v: f"{v/1e6:.2f}M" if v >= 1e6 else f"{v/1e3:.0f}k"
+    for label, key in ((f"{A} keeps, {B} deletes", "a_keep_b_delete"),
+                       (f"{B} keeps, {A} deletes", "b_keep_a_delete")):
+        L.append(row(label, [F[c].get(key, [0, 0])[1] for c in CLASSES], fmt=px))
+
+    L.append("\\bottomrule")
+    L.append("\\end{tabular}}")
+    L.append("\\end{table}")
+    path.write_text("\n".join(L) + "\n")
+    print(f"  wrote {path}")
+
+
+def write_latex_disc_transitions(path: Path, names, trans) -> None:
+    """Emit tables/discovery_transitions.tex — the same joint view for discovery.
+
+    Pooled, the two backends look interchangeable here: each confirms roughly
+    as many candidates the other declines. The human column is where that
+    breaks, and only the joint counts show it.
+    """
+    A, B = "LLaVA", "Qwen"
+    D, P = trans["disc"], trans["disc_policy"]
+    dcls = list(DISC_CLASSES.values())
+
+    def row(label, values):
+        return f"{label} & " + " & ".join(tex_num(v) for v in values) + \
+               f" & {tex_num(sum(values))} \\\\"
+
+    L = ["% Generated by compare_models.py --latex-dir — do not edit by hand."]
+    L.append("\\begin{table}[t]")
+    L.append("\\centering")
+    L.append("\\caption{Paired discovery confirmation on identical candidates, by prompt. "
+             "Rows cover the candidates both backends answered; the last row counts those one "
+             "side left unreadable, which the pipeline treats as non-confirmation. The two "
+             "exclusive rows differ by 8\\% in total and by two orders of magnitude on the "
+             "human prompt.}")
+    L.append("\\label{tab:disc_transitions}")
+    L.append("\\resizebox{\\columnwidth}{!}{%")
+    L.append("\\begin{tabular}{lrrrr}")
+    L.append("\\toprule")
+    L.append("\\textbf{Transition} & \\textbf{Vehicle} & \\textbf{Sign} & "
+             "\\textbf{Human} & \\textbf{Total} \\\\")
+    L.append("\\midrule")
+    for label, key in (("Both confirm", (True, True)),
+                       (f"\\textbf{{{A} only}}", (True, False)),
+                       (f"\\textbf{{{B} only}}", (False, True)),
+                       ("Neither", (False, False))):
+        L.append(row(label, [D[c].get(key, 0) for c in dcls]))
+    L.append("\\addlinespace")
+    L.append(row("Unanswered by one side",
+                 [sum(P[c].values()) - sum(D[c].values()) for c in dcls]))
     L.append("\\bottomrule")
     L.append("\\end{tabular}}")
     L.append("\\end{table}")
@@ -843,7 +1168,7 @@ def main() -> None:
     ap.add_argument("--latex", type=Path, default=None,
                     help="write agent_behavior.tex to this path")
     ap.add_argument("--latex-dir", type=Path, default=None,
-                    help="write agent_behavior/agent_performance/timing .tex into this dir")
+                    help="write agent_behavior/agent_performance/timing/transitions .tex into this dir")
     ap.add_argument("--hpc", action="store_true")
     args = ap.parse_args()
     if args.hpc:
@@ -876,7 +1201,9 @@ def main() -> None:
     diverge = label_divergence(runs, frames)
     times = {n: timing(runs[n], frames) for n in names}
 
-    print_report(names, stats, dstats, refs, agree, diverge, times, ident, args)
+    trans = transitions(runs, frames)
+    casc = cascade(runs, frames)
+    print_report(names, stats, dstats, refs, agree, diverge, times, ident, args, trans, casc)
     if args.latex:
         write_latex(args.latex, names, stats, dstats, ident, coverage)
     if args.latex_dir:
@@ -884,6 +1211,8 @@ def main() -> None:
         write_latex(d / "agent_behavior.tex", names, stats, dstats, ident, coverage)
         write_latex_performance(d / "agent_performance.tex", names, stats, refs, agree, ident)
         write_latex_timing(d / "timing.tex", names, times, ident)
+        write_latex_transitions(d / "transitions.tex", names, trans, ident)
+        write_latex_disc_transitions(d / "discovery_transitions.tex", names, trans)
 
 
 if __name__ == "__main__":

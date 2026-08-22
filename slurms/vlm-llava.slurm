@@ -6,7 +6,7 @@
 #SBATCH --mem=64G
 #SBATCH --time=48:00:00
 #SBATCH --partition=gpu
-#SBATCH --account=project_ito_llm
+#SBATCH --account=project_autolab
 #SBATCH --output=logs/pipeline_%j.log
 #SBATCH --error=logs/pipeline_%j.log
 
