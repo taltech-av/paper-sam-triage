@@ -27,7 +27,7 @@ What the audit found, each reproducible from the commands in
   that back, at 4–13× the time a human needs to judge the same frames by hand.
 - Object discovery is a boundary editor, not an object finder: 78.6 % of its
   candidates are rims around objects SAM already segmented.
-- Deleting the 5.3 % of object pixels the human rejected, at fixed training-set
+- Deleting the 6.4 % of object pixels the human rejected, at fixed training-set
   size, is worth **+2.5 mIoU**. Label purity limits the model, not label volume.
 
 ## Related repositories
