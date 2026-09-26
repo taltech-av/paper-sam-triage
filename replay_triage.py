@@ -122,6 +122,19 @@ def _triage_vlm_only(mask: dict, **_) -> str:
     return triage(ag.get("bbox"), None, ag.get("consistency")).decision
 
 
+def _triage_crop_only(mask: dict, **_) -> str:
+    """Keep a mask only when the VLM confirms its class — no Swin, no LiDAR.
+
+    The VLM on its own, outside the vote. Written after the co-author asked how
+    the VLM performs alone: the paper scores this rule per mask (Table II, 44.0 /
+    32.4 LLaVA, 51.2 / 24.1 Qwen) and this variant gives it a downstream row.
+    Same definition as the "BBox VLM" rows of analyze_human_verification.py and
+    the crop-verdict rows of analyze_single_signals.py: uncertain, contradiction
+    and a missing verdict all delete, so the labels match the per-mask rates.
+    """
+    return "accept" if mask["agents"].get("bbox") == "valid" else TRIAGE_REJECT
+
+
 def _triage_with_bypass(mask: dict, swin_q: float, **_) -> str:
     """Simulate old bypass: masks where swin_bypass=True skip BBox VLM (treat as valid+good).
     Useful for measuring the accuracy vs. efficiency trade-off of the bypass optimization."""
@@ -259,6 +272,7 @@ VARIANTS = {
     "swin_only":          (_triage_swin_only,          "Swin agreement threshold only — no VLM"),
     "lidar_support":      (_triage_lidar_support,      "LiDAR support threshold only — no VLM, no Swin"),
     "vlm_only":           (_triage_vlm_only,           "BBox VLM + consistency — Swin quality ignored"),
+    "crop_only":          (_triage_crop_only,          "BBox VLM verdict alone — keep only confirmed masks"),
     "triage":             (_triage_full,               "Swin + VLM + consistency triage, no discovery"),
     "swin_protected":     (_triage_swin_protected,     "Full triage + Swin protects valid masks from VLM false negatives"),
     "with_bypass":        (_triage_with_bypass,        "Simulate bypass: skip VLM for masks where swin_bypass=True"),

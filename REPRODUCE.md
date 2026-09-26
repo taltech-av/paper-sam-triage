@@ -104,10 +104,12 @@ crops on which both backends return the same verdict.
 Every training set in the ladder is a rule replayed over the stored responses:
 
 ```bash
-python replay_triage.py --list-variants                 # all 11 rules
+python replay_triage.py --list-variants                 # all 13 rules
 python replay_triage.py --variant all                   # the 3 paper variants
 python replay_triage.py --variant triage --with-discovery
 python replay_triage.py --variant swin_only --with-discovery --discovery-geometry-gate
+python replay_triage.py --variant crop_only --tag llava_34b          # VLM crop verdict alone
+python replay_triage.py --variant crop_only --tag qwen2.5vl_72b_v2
 ```
 
 The human-verified (clean) arm is not a rule and has its own writer:
