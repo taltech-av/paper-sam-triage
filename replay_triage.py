@@ -94,6 +94,28 @@ def _triage_swin_only(mask: dict, swin_q: float, **_) -> str:
     return TRIAGE_REJECT if swin < swin_q else "accept"
 
 
+def _triage_lidar_support(mask: dict, **_) -> str:
+    """Reject solely on the deterministic LiDAR support check — no VLM, no Swin.
+
+    Written for the paper's ablation: the agreement table scores LiDAR
+    consistency as a standalone filter (93.6% of bad masks kept, 5.0% of good
+    ones lost) but the downstream ladder never trained it, so "the only verifier
+    that improves segmentation" rested on a signal with no mIoU row. This gives
+    it one. The rule is the same threshold triage uses, applied alone:
+    s_lidar >= LIDAR_SUPPORT_MIN keeps the mask.
+
+    Named `lidar_support`, not `lidar_only`: `annotation_lidar_only` under the
+    same dataset root is Paper II's LiDAR-projection annotation (masks painted
+    only on pixels carrying a return), which is a different object entirely.
+    """
+    s = mask.get("scores", {}).get("lidar_support")
+    if s is None:
+        # No stored score: fall back to the agent's own verdict, and keep the
+        # mask when even that is missing — deletion must never be the default.
+        return TRIAGE_REJECT if mask["agents"].get("consistency") == "fail" else "accept"
+    return TRIAGE_REJECT if s < config.LIDAR_SUPPORT_MIN else "accept"
+
+
 def _triage_vlm_only(mask: dict, **_) -> str:
     """BBox VLM + consistency only — Swin quality signal ignored."""
     ag = mask["agents"]
@@ -235,6 +257,7 @@ def _triage_limits_fixed(mask: dict, swin_q: float, **_) -> str:
 VARIANTS = {
     "raw_sam":            (_triage_raw_sam,            "No triage — original SAM annotation unchanged (baseline)"),
     "swin_only":          (_triage_swin_only,          "Swin agreement threshold only — no VLM"),
+    "lidar_support":      (_triage_lidar_support,      "LiDAR support threshold only — no VLM, no Swin"),
     "vlm_only":           (_triage_vlm_only,           "BBox VLM + consistency — Swin quality ignored"),
     "triage":             (_triage_full,               "Swin + VLM + consistency triage, no discovery"),
     "swin_protected":     (_triage_swin_protected,     "Full triage + Swin protects valid masks from VLM false negatives"),

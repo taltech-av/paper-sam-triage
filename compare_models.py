@@ -65,7 +65,7 @@ from pathlib import Path
 
 import config
 from agents.discovery_agent import _ANSWERABLE, _VALID_RESPONSES
-from core.triage import triage
+from core.triage import TRIAGE_REJECT, triage
 from vlm.health import looks_degenerate
 
 SEP = "─" * 74
@@ -168,8 +168,16 @@ def recomputed_triage(mask: dict) -> str:
     Stored `triage` is not used: the two runs were produced months apart, and
     recomputing both under one rule guarantees the comparison isolates VLM
     verdicts from any rule change in between.
+
+    Exception: a mask auto-rejected upstream never reaches an agent, so all
+    three agent outputs are None. The concordance rule then sees no negative
+    signal and returns human_review, which would silently resurrect a mask the
+    pipeline had already deleted (876 masks, identical in both runs). The
+    stored decision is authoritative for those.
     """
     a = mask["agents"]
+    if all(a.get(k) is None for k in ("bbox", "quality", "consistency")):
+        return mask.get("triage", TRIAGE_REJECT)
     return triage(
         bbox_out=a.get("bbox"),
         quality_out=a.get("quality"),
@@ -862,8 +870,8 @@ def write_latex(path: Path, names, stats, dstats, ident, coverage) -> None:
              "what the pipeline acted on. "
              "Discovery outcomes are re-derived from the raw responses stored by both runs "
              "with a single parser, separating a model declining a candidate "
-             "(\\texttt{other}) from a reply the parser could not read at all; the hit rate "
-             "is over answered candidates only. "
+             "(\\texttt{other}) from a reply naming a word the prompt did not offer; the "
+             "hit rate is over answered candidates only. "
              "``Human objects added'' counts confirmed cyclist and pedestrian candidates.}")
     L.append("\\label{tab:agent_behavior}")
     L.append("\\resizebox{\\columnwidth}{!}{%")
@@ -880,11 +888,16 @@ def write_latex(path: Path, names, stats, dstats, ident, coverage) -> None:
 
     L.append("\\addlinespace")
     L.append("\\multicolumn{3}{l}{\\textit{BBox VLM verdicts (as-recorded)}} \\\\")
+    # Denominator is the masks that actually reached the agent. Dividing by
+    # stats['total'] instead silently included the ones rejected on geometry
+    # beforehand, which have verdict None, and made the three shares sum to 99%.
+    judged = {k: sum(v for verdict, v in stats[k]["bbox"].items() if verdict != "None")
+              for k in names}
     for label, key in (("Valid (object present)", "valid"),
                        ("Invalid (object absent)", "invalid"),
                        ("Background", "background")):
-        L.append(f"{label} & {p(stats[a]['bbox'].get(key,0), stats[a]['total'])} "
-                 f"& {p(stats[b]['bbox'].get(key,0), stats[b]['total'])} \\\\")
+        L.append(f"{label} & {p(stats[a]['bbox'].get(key,0), judged[a])} "
+                 f"& {p(stats[b]['bbox'].get(key,0), judged[b])} \\\\")
 
     # The default share is the reason the two Valid rates are not a like-for-like
     # measure of model behaviour, so it belongs in the table, not a footnote.
@@ -923,7 +936,7 @@ def write_latex(path: Path, names, stats, dstats, ident, coverage) -> None:
     for n in names:
         t = dstats[n]["totals"]
         row.append(num(t.get("unanswered", 0) + t.get("no-response", 0)))
-    L.append(f"Unparseable reply & {row[0]} & {row[1]} \\\\")
+    L.append(f"Reply outside the offered words & {row[0]} & {row[1]} \\\\")
     row = []
     for n in names:
         t = dstats[n]["totals"]
@@ -1103,7 +1116,10 @@ def write_latex_disc_transitions(path: Path, names, trans) -> None:
                        ("Neither", (False, False))):
         L.append(row(label, [D[c].get(key, 0) for c in dcls]))
     L.append("\\addlinespace")
-    L.append(row("Unanswered by one side",
+    # Not "unanswered": every one of these is an on-topic reply that named a
+    # word outside the prompt's offered set (634 "traffic light" on sign
+    # candidates, 323 "neither" on human ones, all LLaVA's).
+    L.append(row("Answered outside the offered words",
                  [sum(P[c].values()) - sum(D[c].values()) for c in dcls]))
     L.append("\\bottomrule")
     L.append("\\end{tabular}}")

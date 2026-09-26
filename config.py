@@ -65,7 +65,7 @@ def _set_output_dirs(root: Path) -> None:
 # DATA_ROOT alongside annotation_sam rather than duplicated under each
 # vlm/<tag>/. Filing them under a model tag also implies a provenance they do
 # not have — nothing in `vlm/llava_34b/annotation_raw_sam` came from LLaVA.
-VLM_INDEPENDENT_VARIANTS = frozenset({"raw_sam", "swin_only"})
+VLM_INDEPENDENT_VARIANTS = frozenset({"raw_sam", "swin_only", "lidar_support"})
 
 
 def variant_dir(variant_name: str, tag_root: Path) -> Path:

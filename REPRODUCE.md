@@ -56,6 +56,19 @@ Prints the LiDAR-threshold sweep, the disjunctive rule, the dense-agreement-only
 corner, and the review-ordering block. The shipped setting (τ = 0.10 → 54.9 /
 14.1) must reproduce the `triage` row of the per-rule agreement table exactly — that equality is the check that the replay is faithful.
 
+### Each signal alone, class bias, and the vote's input patterns
+
+```bash
+python analyze_single_signals.py --export human_verified_output/verify_export.csv
+```
+
+Scores every signal on its own, including the VLM crop verdict outside the vote
+(44.0 / 32.4 LLaVA, 51.2 / 24.1 Qwen), and prints the per-class FA / FR table,
+the crop-verdict answer mix, the dense-vs-crop overlap on incorrect masks, and
+which signal combinations let incorrect masks through the vote. Dense agreement
+is scored as the trained `swin_only` variant (α ≥ 0.30 for every class), which
+reproduces the paper's 23.5 / 26.7 row.
+
 ### Discovery candidate geometry
 
 Candidate counts and pixel shares come from two scripts, because a candidate
